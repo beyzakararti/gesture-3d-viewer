@@ -19,8 +19,6 @@ Electron ve Three.js arayüzü, Python tarafındaki MediaPipe Holistic takibiyle
 - Uygulama penceresini anlatım sesiyle WebM video olarak kaydetmek
 - Jest tabanlı insan–bilgisayar etkileşimi deneyleri geliştirmek
 
-Bu sürüm bir prototiptir; tıbbi, endüstriyel veya güvenlik-kritik ölçüm aracı değildir.
-Standart tek kameralı mesafe ve derinlik hesapları yaklaşıktır.
 
 ## Özellikler
 
@@ -51,7 +49,7 @@ Standart tek kameralı mesafe ve derinlik hesapları yaklaşıktır.
 
 STL yalnızca yüzey geometrisi taşır; renk, malzeme, montaj ağacı ve animasyon içermez.
 OBJ için harici `.mtl` ve dokular henüz yüklenmez. STEP, IGES ve native CAD formatları
-henüz desteklenmez.
+henüz desteklenmiyor, ekleyeceğim.
 
 ## Gereksinimler
 
