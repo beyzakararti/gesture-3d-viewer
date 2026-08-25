@@ -1,0 +1,5 @@
+fastapi==0.115.12
+mediapipe==1.0.1
+opencv-contrib-python==5.0.0.93
+uvicorn==0.34.2
+websockets==15.0.1

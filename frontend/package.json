@@ -1,0 +1,22 @@
+{
+  "name": "gesture-3d-viewer-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Secure Electron and Three.js shell for the gesture-controlled 3D viewer",
+  "main": "src/main.js",
+  "scripts": {
+    "build:renderer": "esbuild ./src/renderer.js --bundle --format=iife --platform=browser --target=chrome142 --outfile=./generated/renderer.bundle.js",
+    "start": "npm run build:renderer && electron .",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/boot.js && node --check src/renderer.js && npm run build:renderer"
+  },
+  "dependencies": {
+    "three": "0.176.0"
+  },
+  "devDependencies": {
+    "electron": "44.0.0",
+    "esbuild": "0.25.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

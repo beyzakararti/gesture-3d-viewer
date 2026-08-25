@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gesture-3d-viewer.local/schemas/hello.schema.json",
+  "title": "Backend hello message",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "type", "message", "timestamp"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "type": { "const": "hello" },
+    "message": { "const": "gesture-backend-ready" },
+    "timestamp": { "type": "string", "format": "date-time" }
+  }
+}

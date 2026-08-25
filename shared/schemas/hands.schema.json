@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gesture-3d-viewer.local/schemas/hands.schema.json",
+  "title": "MediaPipe hand landmark message",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "type", "frameId", "hands", "pose", "segmentationMask", "personDistanceMeters", "facePresent", "blowScore", "faceSignals", "processingMs"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "type": { "const": "hands" },
+    "frameId": { "type": "integer", "minimum": 1 },
+    "processingMs": { "type": "number", "minimum": 0 },
+    "facePresent": { "type": "boolean" },
+    "blowScore": { "type": "number", "minimum": 0, "maximum": 1 },
+    "faceSignals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mouthPucker", "mouthFunnel", "cheekPuff", "jawOpen"],
+      "properties": {
+        "mouthPucker": { "type": "number", "minimum": 0, "maximum": 1 },
+        "mouthFunnel": { "type": "number", "minimum": 0, "maximum": 1 },
+        "cheekPuff": { "type": "number", "minimum": 0, "maximum": 1 },
+        "jawOpen": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "pose": {
+      "type": "array",
+      "maxItems": 33,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["x", "y", "z", "visibility"],
+        "properties": {
+          "x": { "type": "number" },
+          "y": { "type": "number" },
+          "z": { "type": "number" },
+          "visibility": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "segmentationMask": { "type": ["string", "null"], "contentEncoding": "base64" },
+    "personDistanceMeters": { "type": ["number", "null"], "minimum": 0 },
+    "hands": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["handedness", "score", "landmarks"],
+        "properties": {
+          "handedness": { "enum": ["Left", "Right", "Unknown"] },
+          "score": { "type": "number", "minimum": 0, "maximum": 1 },
+          "landmarks": {
+            "type": "array",
+            "minItems": 21,
+            "maxItems": 21,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["x", "y", "z"],
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "z": { "type": "number" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

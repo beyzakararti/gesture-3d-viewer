@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: ws://127.0.0.1:8765; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+    <title>Gesture 3D Viewer</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main id="viewport" aria-label="3B görüntüleme alanı">
+      <div class="space-decor" aria-hidden="true">
+        <span class="orbit orbit-a">★</span><span class="orbit orbit-b">🪐</span>
+        <span class="orbit orbit-c">🚀</span><span class="orbit orbit-d">✦</span>
+        <span class="orbit orbit-e">⚛</span><span class="orbit orbit-f">🌌</span>
+        <span class="orbit orbit-g">☄</span><span class="orbit orbit-h">🔭</span>
+      </div>
+      <video id="camera" autoplay playsinline muted aria-label="Webcam görüntüsü"></video>
+      <canvas id="scene" aria-label="Three.js sahnesi"></canvas>
+      <canvas id="person-occlusion" aria-label="Kişi örtüşme katmanı"></canvas>
+      <img id="left-shoulder-asset" class="shoulder-asset" alt="Sol omuz sunum görseli">
+      <img id="right-shoulder-asset" class="shoulder-asset" alt="Sağ omuz sunum görseli">
+      <canvas id="hands" aria-label="El landmark önizlemesi"></canvas>
+      <section id="control-panel" class="panel">
+        <div class="panel-header">
+          <h1>Gesture 3D Viewer</h1>
+          <button id="toggle-panel" class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-content" title="Kontrol panelini daralt">‹</button>
+        </div>
+        <div id="panel-content" class="panel-content">
+        <p id="camera-status">Kamera kapalı. Görüntüyü başlatmak için açıkça izin verin.</p>
+        <p id="person-status" class="status person-searching">Kişi ve mesafe algılaması kamera açılınca başlar.</p>
+        <div class="actions">
+          <button id="start-camera" type="button">Kameraya izin ver ve başlat</button>
+          <button id="stop-camera" type="button" disabled>Kamerayı durdur</button>
+        </div>
+        <p id="backend-status" class="status">Backend: kontrol ediliyor…</p>
+        <hr>
+        <h2>3B model</h2>
+        <p id="model-status" class="status">Henüz model yüklenmedi. Yerel bir GLB, STL veya OBJ dosyası seçin.</p>
+        <div class="actions model-actions">
+          <button id="choose-model" type="button">3B model yükle</button>
+          <input id="model-file" type="file" accept=".glb,.stl,.obj,model/gltf-binary,model/stl,model/obj">
+          <button id="reset-view" type="button" disabled>Görünümü sıfırla</button>
+          <button id="toggle-wireframe" type="button" disabled>Tel kafes: kapalı</button>
+          <button id="toggle-rotation" type="button" disabled>Otomatik döndür: kapalı</button>
+          <button id="toggle-animation" type="button" disabled>Animasyonu oynat</button>
+          <button id="toggle-gestures" type="button" disabled>El kontrolü: kapalı</button>
+        </div>
+        <p id="gesture-status" class="status">Jest kontrolü için önce model yükleyin.</p>
+        <p class="hint">Açık tek el: döndür · Başparmak + işaret parmağı: tut ve sürükle</p>
+        <p class="hint">İki eli yaklaştır/uzaklaştır: zoom</p>
+        <p class="hint">Spock/Vulcan selamını 1 saniye sabit tut: modeli kilitle/aç. Yeniden tetiklemek için elini indir.</p>
+        <p class="hint">Fare: sol döndür · Tekerlek yakınlaştır · Sağ kaydır</p>
+        <hr>
+        <h2>Canlı sunum</h2>
+        <p id="presentation-status" class="status">Omuzlara sabitlemek için iki görsel seçebilirsiniz.</p>
+        <div class="actions model-actions">
+          <button id="choose-left-image" type="button">Sol görseli seç</button>
+          <input id="left-image-file" class="hidden-file" type="file" accept="image/png,image/jpeg,image/webp">
+          <button id="choose-right-image" type="button">Sağ görseli seç</button>
+          <input id="right-image-file" class="hidden-file" type="file" accept="image/png,image/jpeg,image/webp">
+          <button id="clear-images" type="button">Görselleri kaldır</button>
+        </div>
+        <p class="hint">PNG, JPG veya WebP · Her dosya en fazla 20 MB</p>
+        <hr>
+        <h2>Video kayıt</h2>
+        <p id="recording-status" class="status">Kayıt kapalı. Uygulama görüntüsü ve mikrofon kaydedilir.</p>
+        <label class="recording-option">
+          <input id="record-microphone" type="checkbox" checked>
+          Anlatım sesini mikrofondan kaydet
+        </label>
+        <div class="actions model-actions">
+          <button id="start-recording" type="button">Kaydı başlat</button>
+          <button id="stop-recording" type="button" disabled>Kaydı durdur ve kaydet</button>
+        </div>
+        </div>
+      </section>
+    </main>
+    <script src="/boot.js" defer></script>
+    <script src="/renderer.bundle.js" defer></script>
+  </body>
+</html>

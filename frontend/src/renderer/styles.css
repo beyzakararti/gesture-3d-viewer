@@ -1,0 +1,137 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, sans-serif;
+  background: #080b12;
+  color: #f4f7fb;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #viewport {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+#viewport { position: relative; background: radial-gradient(circle at center, #172033, #080b12); }
+
+.space-decor { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.orbit { position: absolute; color: rgba(143, 177, 255, .2); filter: drop-shadow(0 0 12px rgba(91,124,250,.28)); }
+.orbit-a { left: 47%; top: 7%; font-size: 1.3rem; }
+.orbit-b { right: 8%; top: 13%; font-size: 2.4rem; transform: rotate(-12deg); }
+.orbit-c { right: 18%; bottom: 12%; font-size: 2rem; transform: rotate(-20deg); }
+.orbit-d { left: 39%; bottom: 18%; font-size: 1.8rem; }
+.orbit-e { right: 3%; top: 53%; font-size: 2.2rem; }
+.orbit-f { left: 54%; top: 42%; font-size: 2.1rem; opacity: .55; }
+.orbit-g { right: 37%; top: 23%; font-size: 1.7rem; }
+.orbit-h { left: 35%; bottom: 5%; font-size: 1.8rem; }
+
+#camera, #scene, #person-occlusion, #hands {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#camera { object-fit: cover; transform: scaleX(-1); }
+#scene { z-index: 1; }
+#person-occlusion { z-index: 2; pointer-events: none; }
+#hands { z-index: 3; pointer-events: none; }
+
+.shoulder-asset {
+  position: absolute;
+  z-index: 2;
+  width: 220px;
+  max-height: 44vh;
+  object-fit: contain;
+  opacity: 0;
+  pointer-events: none;
+  border: 2px solid rgba(255,255,255,.8);
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 12px 36px rgba(0,0,0,.38);
+  transform-origin: center;
+  transition: opacity .15s ease, transform .08s linear;
+}
+
+.panel {
+  position: absolute;
+  z-index: 4;
+  top: 24px;
+  left: 24px;
+  width: min(410px, calc(100% - 48px));
+  max-height: calc(100% - 48px);
+  overflow-y: auto;
+  padding: 20px;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 16px;
+  background: rgba(8, 11, 18, .82);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 50px rgba(0,0,0,.3);
+  transition: width .24s ease, padding .24s ease, background .24s ease;
+}
+
+.panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.panel-header h1 { margin: 0; white-space: nowrap; }
+.panel-toggle { width: 36px; height: 36px; padding: 0; flex: 0 0 auto; font-size: 1.7rem; line-height: 1; border-radius: 50%; }
+.panel-content { margin-top: 10px; }
+.panel.collapsed { width: auto; max-width: calc(100% - 48px); padding: 12px 14px; background: rgba(8, 11, 18, .7); }
+.panel.collapsed .panel-content { display: none; }
+.panel.collapsed .panel-toggle { transform: rotate(180deg); }
+
+h1 { margin: 0 0 8px; font-size: 1.25rem; }
+h2 { margin: 0 0 8px; font-size: 1rem; }
+p { color: #c4ccda; line-height: 1.45; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.model-actions { margin-top: 12px; }
+
+hr {
+  margin: 18px 0;
+  border: 0;
+  border-top: 1px solid rgba(255,255,255,.13);
+}
+
+button {
+  border: 0;
+  border-radius: 9px;
+  padding: 10px 14px;
+  background: #5b7cfa;
+  color: white;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+button:disabled { opacity: .45; cursor: not-allowed; }
+#model-file, .hidden-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.status { margin-bottom: 0; font-size: .875rem; }
+.person-detected { color: #77e7a8; }
+.person-searching { color: #f1c96d; }
+.person-foreground { color: #7fdcff; font-weight: 700; }
+.hint { margin: 12px 0 0; font-size: .78rem; color: #8f9aae; }
+
+.recording-active::before {
+  content: '';
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #ff4057;
+  box-shadow: 0 0 0 4px rgba(255,64,87,.16);
+}
+
+.recording-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.75rem 0;
+  color: #d9deea;
+  cursor: pointer;
+}
+
+.recording-option input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: #5271ff;
+}
