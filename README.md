@@ -7,6 +7,8 @@ Proje [beyzakararti](https://github.com/beyzakararti) byeza <3 tarafından geli�
 Electron ve Three.js arayüzü, Python tarafındaki MediaPipe Holistic takibiyle yalnızca
 `localhost` üzerinden haberleşir. Kamera kareleri ve yüklenen modeller uzak servislere gönderilmez.
 
+!!! Daha tam bitmedi ama şimdilik işlevini yerine getiriyor, üzerine çalışılıp en optimum hale getirilecektir !!!
+
 ## Ne için kullanılabilir?
 
 - GLB, STL ve OBJ mekanik parçalarını kamera görüntüsü üzerinde incelemek
