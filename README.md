@@ -2,7 +2,7 @@
 
 Gesture 3D Viewer, webcam görüntüsüne yerel 3B modeller ve sunum görselleri yerleştiren,
 bunları el hareketleriyle kontrol etmeyi amaçlayan deneysel bir masaüstü uygulamasıdır.
-Proje [beyzakararti](https://github.com/beyzakararti) tarafından geliştirilmektedir.
+Proje [beyzakararti](https://github.com/beyzakararti) byeza <3 tarafından geliştirilmektedir.
 
 Electron ve Three.js arayüzü, Python tarafındaki MediaPipe Holistic takibiyle yalnızca
 `localhost` üzerinden haberleşir. Kamera kareleri ve yüklenen modeller uzak servislere gönderilmez.
