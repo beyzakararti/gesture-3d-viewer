@@ -6,7 +6,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const APP_ORIGIN = 'app://viewer';
-let recordingAuthorizationExpiresAt = 0;
+let mainWindow = null;
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",
@@ -95,17 +95,6 @@ function installPermissionGuards() {
     callback((localMedia || displayCapture) && isTrustedRequest(webContents, details.securityOrigin));
   });
 
-  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-    const trustedSource = isTrustedAppUrl(request.securityOrigin)
-      || isTrustedAppUrl(request.frame?.url);
-    const trusted = Date.now() <= recordingAuthorizationExpiresAt
-      && request.videoRequested
-      && !request.audioRequested
-      && request.frame
-      && trustedSource;
-    recordingAuthorizationExpiresAt = 0;
-    callback(trusted ? { video: request.frame } : {});
-  });
 }
 
 function installSecurityHeaders() {
@@ -118,7 +107,7 @@ function installSecurityHeaders() {
           'Content-Security-Policy': [CSP],
           'X-Content-Type-Options': ['nosniff'],
           'Referrer-Policy': ['no-referrer'],
-          'Permissions-Policy': ['camera=(self), microphone=(self)']
+          'Permissions-Policy': ['camera=(self), microphone=(self), display-capture=(self)']
         }
       });
     }
@@ -140,6 +129,7 @@ function createWindow() {
       webSecurity: true
     }
   });
+  mainWindow = window;
 
   window.removeMenu();
   window.once('ready-to-show', () => window.show());
@@ -160,11 +150,11 @@ app.whenReady().then(async () => {
     backendUrl: 'ws://127.0.0.1:8765/ws'
   }));
 
-  ipcMain.handle('recording:authorize', (event) => {
+  ipcMain.handle('recording:get-source-id', (event) => {
     const senderUrl = event.senderFrame?.url || event.sender.getURL();
-    if (!isTrustedAppUrl(senderUrl)) throw new Error('Untrusted recording authorization');
-    recordingAuthorizationExpiresAt = Date.now() + 5000;
-    return true;
+    if (!isTrustedAppUrl(senderUrl)) throw new Error('Untrusted recording source request');
+    if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Application window is unavailable');
+    return mainWindow.getMediaSourceId();
   });
 
   ipcMain.handle('recording:save', async (event, arrayBuffer) => {

@@ -32,7 +32,7 @@ class HandTracker:
             min_pose_detection_confidence=0.55,
             min_pose_landmarks_confidence=0.55,
             min_hand_landmarks_confidence=0.55,
-            output_face_blendshapes=True,
+            output_face_blendshapes=False,
             output_segmentation_mask=True,
         )
         self._landmarker = mp.tasks.vision.HolisticLandmarker.create_from_options(options)
@@ -102,24 +102,6 @@ class HandTracker:
                     0.38 / (2.0 * shoulder_span * np.tan(np.deg2rad(30))), 3
                 )
 
-        blendshapes = {
-            category.category_name: float(category.score)
-            for category in (result.face_blendshapes or [])
-        }
-        mouth_pucker = blendshapes.get("mouthPucker", 0.0)
-        mouth_funnel = blendshapes.get("mouthFunnel", 0.0)
-        cheek_puff = blendshapes.get("cheekPuff", 0.0)
-        jaw_open = blendshapes.get("jawOpen", 0.0)
-        # A visual blow requires sustained pursed/funnelled lips with a mostly closed jaw.
-        # This deliberately rejects ordinary speech at the cost of requiring a clear gesture.
-        if mouth_pucker < 0.55 or mouth_funnel < 0.16 or jaw_open > 0.24:
-            blow_score = 0.0
-        else:
-            speech_penalty = min(jaw_open * 2.5, 0.75)
-            blow_score = (
-                mouth_pucker * 0.7 + mouth_funnel * 0.2 + cheek_puff * 0.1
-            ) * (1.0 - speech_penalty)
-
         return {
             "schemaVersion": 1,
             "type": "hands",
@@ -128,14 +110,6 @@ class HandTracker:
             "pose": pose,
             "segmentationMask": segmentation_mask,
             "personDistanceMeters": person_distance_meters,
-            "facePresent": bool(result.face_landmarks),
-            "blowScore": round(blow_score, 4),
-            "faceSignals": {
-                "mouthPucker": round(mouth_pucker, 4),
-                "mouthFunnel": round(mouth_funnel, 4),
-                "cheekPuff": round(cheek_puff, 4),
-                "jawOpen": round(jaw_open, 4),
-            },
             "processingMs": round((perf_counter() - started) * 1000, 2),
         }
 

@@ -30,12 +30,9 @@ Başparmak ve işaret parmağı uçları arasındaki mesafe avuç boyutuna oranl
 tek-el rotasyonu bastırılır ve parmakların orta noktası kameranın sağ/yukarı düzleminde model
 ötelemesine dönüştürülür. Ayrı tutma ve bırakma eşikleri sınır çevresindeki titreşimi önler.
 
-Holistic Landmarker ellerin yanında pose ve yüz blendshape verisini aynı inference içinde
-üretir. Omuz landmark'ları iki yerel sunum görselini video üzerine sabitler. `mouthPucker`,
-`mouthFunnel` ve `cheekPuff` skorlarından türetilen üfleme skoru süre, hysteresis, yakınlık,
-cooldown ve maksimum hız sınırlarıyla model üzerinde sönümlü bir itkiye dönüştürülür.
-Normal konuşmayı bastırmak için üfleme ayrıca düşük `jawOpen`, yüksek `mouthPucker` ve
-`mouthFunnel` koşullarını ister. Pinch başlangıcı, parmak orta noktasından Three.js modeline
+Holistic Landmarker ellerin yanında pose verisini aynı inference içinde üretir. Omuz
+landmark'ları iki yerel sunum görselini video üzerine sabitler. Pinch başlangıcı, parmak
+orta noktasından Three.js modeline
 raycast isabeti gerektirir. Spock hareketi parmak açıklık oranlarından tanınır ve ardışık kare
 onayından sonra sunum kilidini toggle eder.
 
@@ -47,8 +44,9 @@ düşük çözünürlüklü segmentasyon maskesi yalnızca kişi bu eşiğin ön
 Three.js katmanını örter. Bu, monoküler kamerada metrik derinlik sensörü olmadığı için yaklaşık
 bir görsel derinlik modelidir.
 
-Video kaydı renderer'daki `getDisplayMedia` ve `MediaRecorder` ile mevcut Electron penceresini
-WebM olarak yakalar. Kullanıcı mikrofon kaydını seçtiyse ayrı bir `getUserMedia` izni istenir;
+Video kaydı Electron ana sürecinden alınan uygulama pencere kaynak kimliğiyle `getUserMedia`
+ve `MediaRecorder` kullanarak mevcut Electron penceresini WebM olarak yakalar. Kullanıcı
+mikrofon kaydını seçtiyse ayrı bir `getUserMedia` izni istenir;
 mikrofon kanalı ekran video iziyle birleştirilir. Echo cancellation, noise suppression ve automatic
 gain control talep edilir. Electron ana süreci bu kaynakları yalnızca güvenilir `app://viewer`
 origin'inden gelen açık kullanıcı hareketinde verir. Sistem sesi kaydedilmez. Renderer

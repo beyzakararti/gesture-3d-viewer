@@ -154,6 +154,48 @@ function clearPersonOcclusion() {
   personContext.clearRect(0, 0, personCanvas.width, personCanvas.height);
 }
 
+function drawHandSilhouette(hands) {
+  handClipCanvas.width = 480;
+  handClipCanvas.height = 270;
+  handClipContext.clearRect(0, 0, 480, 270);
+  handClipContext.fillStyle = 'white';
+  handClipContext.strokeStyle = 'white';
+  handClipContext.lineCap = 'round';
+  handClipContext.lineJoin = 'round';
+
+  for (const hand of hands) {
+    if (!Array.isArray(hand.landmarks) || hand.landmarks.length < 21) continue;
+    const point = (index) => ({
+      x: hand.landmarks[index].x * 480,
+      y: hand.landmarks[index].y * 270
+    });
+    const wrist = point(0);
+    const middleMcp = point(9);
+    const palmSize = Math.max(12, Math.hypot(wrist.x - middleMcp.x, wrist.y - middleMcp.y));
+
+    // Her parmak ayrı çizilir; aralarındaki boşluklar özellikle saydam bırakılır.
+    handClipContext.lineWidth = Math.max(7, palmSize * 0.34);
+    for (const finger of [[0, 1, 2, 3, 4], [0, 5, 6, 7, 8], [0, 9, 10, 11, 12], [0, 13, 14, 15, 16], [0, 17, 18, 19, 20]]) {
+      handClipContext.beginPath();
+      const first = point(finger[0]);
+      handClipContext.moveTo(first.x, first.y);
+      for (const index of finger.slice(1)) {
+        const current = point(index);
+        handClipContext.lineTo(current.x, current.y);
+      }
+      handClipContext.stroke();
+    }
+
+    // Avuç içini doldur, fakat parmakların arasını tek bir daireyle kapatma.
+    const palm = [0, 1, 5, 9, 13, 17].map(point);
+    handClipContext.beginPath();
+    handClipContext.moveTo(palm[0].x, palm[0].y);
+    for (const current of palm.slice(1)) handClipContext.lineTo(current.x, current.y);
+    handClipContext.closePath();
+    handClipContext.fill();
+  }
+}
+
 function drawPersonOcclusion(maskBase64, frameId, personInFront, handInFront, hands) {
   if (!maskBase64 || (!personInFront && !handInFront) || !video.videoWidth || !video.videoHeight) {
     clearPersonOcclusion();
@@ -173,23 +215,11 @@ function drawPersonOcclusion(maskBase64, frameId, personInFront, handInFront, ha
     personFrameContext.drawImage(video, 0, 0, 480, 270);
     personFrameContext.restore();
     personFrameContext.globalCompositeOperation = 'destination-in';
-    personFrameContext.drawImage(maskImage, 0, 0, 480, 270);
-    if (!personInFront && handInFront) {
-      handClipCanvas.width = 480;
-      handClipCanvas.height = 270;
-      handClipContext.clearRect(0, 0, 480, 270);
-      handClipContext.fillStyle = 'white';
-      for (const hand of hands) {
-        const palm = hand.landmarks[9];
-        const palmSize = Math.hypot(
-          (hand.landmarks[0].x - palm.x) * 480,
-          (hand.landmarks[0].y - palm.y) * 270
-        );
-        handClipContext.beginPath();
-        handClipContext.arc(palm.x * 480, palm.y * 270, Math.max(48, palmSize * 1.8), 0, Math.PI * 2);
-        handClipContext.fill();
-      }
+    if (handInFront) {
+      drawHandSilhouette(hands);
       personFrameContext.drawImage(handClipCanvas, 0, 0);
+    } else {
+      personFrameContext.drawImage(maskImage, 0, 0, 480, 270);
     }
     personFrameContext.globalCompositeOperation = 'source-over';
 
@@ -340,26 +370,40 @@ async function startRecording() {
     ? 'Uygulama görüntüsü ve mikrofon izinleri isteniyor…'
     : 'Uygulama görüntüsü için kayıt izni isteniyor…';
 
+  let recordingPhase = 'ekran görüntüsü izni';
   try {
-    await window.desktopApi.authorizeRecording();
-    displayStream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: 30, max: 30 } },
+    const sourceId = await window.desktopApi.getRecordingSourceId();
+    displayStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: sourceId,
+          maxFrameRate: 30
+        }
+      },
       audio: false
     });
     if (recordMicrophoneCheckbox.checked) {
-      microphoneStream = await navigator.mediaDevices.getUserMedia({
-        video: false,
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
+      recordingPhase = 'mikrofon izni';
+      try {
+        microphoneStream = await navigator.mediaDevices.getUserMedia({
+          video: false,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+      } catch (error) {
+        microphoneStream = null;
+        recordingStatus.textContent = `Mikrofon izni verilmedi (${error.message}); sessiz kayıt başlatılıyor…`;
+      }
     }
     const recordingStream = new MediaStream([
       ...displayStream.getVideoTracks(),
       ...(microphoneStream?.getAudioTracks() ?? [])
     ]);
+    recordingPhase = 'video kodlayıcı';
     const mimeType = preferredRecordingMimeType();
     mediaRecorder = new MediaRecorder(recordingStream, mimeType ? { mimeType } : undefined);
     recordingChunks = [];
@@ -385,7 +429,7 @@ async function startRecording() {
     mediaRecorder = null;
     startRecordingButton.disabled = false;
     recordMicrophoneCheckbox.disabled = false;
-    recordingStatus.textContent = `Kayıt başlatılamadı: ${error.message}`;
+    recordingStatus.textContent = `Kayıt başlatılamadı (${recordingPhase}): ${error.name ? `${error.name}: ` : ''}${error.message}`;
   }
 }
 

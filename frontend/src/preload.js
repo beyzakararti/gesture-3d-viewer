@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const allowedInvokeChannels = new Set(['app:get-runtime-info', 'recording:authorize', 'recording:save']);
+const allowedInvokeChannels = new Set(['app:get-runtime-info', 'recording:get-source-id', 'recording:save']);
 
 contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
   getRuntimeInfo: () => {
@@ -12,8 +12,8 @@ contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
     }
     return ipcRenderer.invoke(channel);
   },
-  authorizeRecording: () => {
-    const channel = 'recording:authorize';
+  getRecordingSourceId: () => {
+    const channel = 'recording:get-source-id';
     if (!allowedInvokeChannels.has(channel)) {
       return Promise.reject(new Error('IPC channel is not allowed'));
     }

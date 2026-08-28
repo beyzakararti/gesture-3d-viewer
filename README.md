@@ -30,7 +30,6 @@ Electron ve Three.js arayüzü, Python tarafındaki MediaPipe Holistic takibiyle
 - Spock/Vulcan hareketiyle sunum kilidi
 - Yüz, el, pose ve kişi segmentasyonu
 - Yaklaşık kamera mesafesi ve kişi/model örtüşmesi
-- Dudak hareketinden görsel üfleme etkisi
 - Omuzlara PNG, JPG veya WebP sunum görseli yerleştirme
 - Mikrofonlu veya sessiz uygulama videosu kaydı
 - Daraltılabilir kontrol paneli
@@ -109,6 +108,8 @@ docs/      Mimari ve teknik notlar
 - MP4 dışa aktarma, sistem sesi ve kayıt kalite ayarları
 - Otomatik testler, performans profilleme ve GPU optimizasyonu
 - Erişilebilirlik, yerelleştirme ve paketlenmiş Windows kurulumu
+- AR/display gözlükleri ve benzeri giyilebilir ekranlarda jest kontrollü 3B sunum desteği
+- Zoom, Google Meet ve benzeri toplantı platformları için sanal kamera ve yayın entegrasyonu
 
 Katkı yapmak isteyenler issue açabilir veya amaç ve test adımları belirtilmiş bir pull request
 gönderebilir. Mimari ayrıntılar için [docs/architecture.md](docs/architecture.md) dosyasına bakın.

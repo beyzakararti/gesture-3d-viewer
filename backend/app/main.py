@@ -37,7 +37,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             "type": "hello",
             "message": "gesture-backend-ready",
             "timestamp": datetime.now(UTC).isoformat(),
-            "capabilities": ["hand-landmarks-v1", "pose-landmarks-v1", "face-blow-score-v1", "person-segmentation-v1"],
+            "capabilities": ["hand-landmarks-v1", "pose-landmarks-v1", "person-segmentation-v1"],
         }
     )
 

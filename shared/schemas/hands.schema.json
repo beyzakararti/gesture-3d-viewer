@@ -4,25 +4,12 @@
   "title": "MediaPipe hand landmark message",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "type", "frameId", "hands", "pose", "segmentationMask", "personDistanceMeters", "facePresent", "blowScore", "faceSignals", "processingMs"],
+  "required": ["schemaVersion", "type", "frameId", "hands", "pose", "segmentationMask", "personDistanceMeters", "processingMs"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "type": { "const": "hands" },
     "frameId": { "type": "integer", "minimum": 1 },
     "processingMs": { "type": "number", "minimum": 0 },
-    "facePresent": { "type": "boolean" },
-    "blowScore": { "type": "number", "minimum": 0, "maximum": 1 },
-    "faceSignals": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["mouthPucker", "mouthFunnel", "cheekPuff", "jawOpen"],
-      "properties": {
-        "mouthPucker": { "type": "number", "minimum": 0, "maximum": 1 },
-        "mouthFunnel": { "type": "number", "minimum": 0, "maximum": 1 },
-        "cheekPuff": { "type": "number", "minimum": 0, "maximum": 1 },
-        "jawOpen": { "type": "number", "minimum": 0, "maximum": 1 }
-      }
-    },
     "pose": {
       "type": "array",
       "maxItems": 33,
