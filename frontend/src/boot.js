@@ -18,7 +18,7 @@ const personFrameContext = personFrameCanvas.getContext('2d');
 const handClipCanvas = document.createElement('canvas');
 const handClipContext = handClipCanvas.getContext('2d');
 const captureCanvas = document.createElement('canvas');
-const captureContext = captureCanvas.getContext('2d');
+const captureContext = captureCanvas.getContext('2d', { willReadFrequently: false });
 const presentationStatus = document.querySelector('#presentation-status');
 const leftShoulderAsset = document.querySelector('#left-shoulder-asset');
 const rightShoulderAsset = document.querySelector('#right-shoulder-asset');
@@ -33,6 +33,9 @@ const stopRecordingButton = document.querySelector('#stop-recording');
 const recordMicrophoneCheckbox = document.querySelector('#record-microphone');
 const controlPanel = document.querySelector('#control-panel');
 const togglePanelButton = document.querySelector('#toggle-panel');
+const toolTabs = [...document.querySelectorAll('.tool-tab')];
+const toolPages = [...document.querySelectorAll('.tool-page')];
+
 const HAND_CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],
   [0, 5], [5, 6], [6, 7], [7, 8],
@@ -40,6 +43,26 @@ const HAND_CONNECTIONS = [
   [9, 13], [13, 14], [14, 15], [15, 16],
   [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]
 ];
+
+// Frames sent for tracking. 640x360 keeps small fingers several pixels wide,
+// which is what MediaPipe needs to keep a hand latched between frames.
+const CAPTURE_WIDTH = 640;
+const CAPTURE_HEIGHT = 360;
+const CAPTURE_QUALITY = 0.8;
+const CAPTURE_INTERVAL_MS = 80;
+// Person cut-out resolution. The segmentation mask itself is coarser; this is
+// the buffer the live video is masked into before it is scaled to the viewport.
+const COMPOSITE_WIDTH = 640;
+const COMPOSITE_HEIGHT = 360;
+const OCCLUSION_FRAME_BUDGET_MS = 32;
+const DEPTH_HYSTERESIS_METRES = 0.06;
+// Horizontal extent of the view at distance d is d * 2 * tan(hfov/2); the
+// backend assumes a 60 degree horizontal field of view for its distance maths,
+// so reuse the same factor to turn normalised z into metres.
+const VIEW_WIDTH_FACTOR = 2 * Math.tan((30 * Math.PI) / 180);
+
+const sharedState = (window.__BYEZA__ = window.__BYEZA__ ?? {});
+
 let mediaStream = null;
 let gestureSocket = null;
 let frameInFlight = false;
@@ -51,7 +74,23 @@ let microphoneStream = null;
 let mediaRecorder = null;
 let recordingChunks = [];
 let recordingStartedAt = 0;
-let latestSegmentationFrame = 0;
+
+let maskBitmap = null;
+let maskDecodeInFlight = false;
+let latestPose = [];
+let latestHands = [];
+let lastOcclusionDraw = 0;
+let occlusionPainted = false;
+let personInFrontLatched = false;
+
+captureCanvas.width = CAPTURE_WIDTH;
+captureCanvas.height = CAPTURE_HEIGHT;
+personFrameCanvas.width = COMPOSITE_WIDTH;
+personFrameCanvas.height = COMPOSITE_HEIGHT;
+handClipCanvas.width = COMPOSITE_WIDTH;
+handClipCanvas.height = COMPOSITE_HEIGHT;
+handClipContext.lineCap = 'round';
+handClipContext.lineJoin = 'round';
 
 window.addEventListener('error', (event) => {
   cameraStatus.textContent = `Arayüz hatası: ${event.message}`;
@@ -75,11 +114,12 @@ async function startCamera() {
     }
 
     mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
       audio: false
     });
     video.srcObject = mediaStream;
     await video.play();
+    document.querySelector('#viewport').classList.add('camera-active');
     cameraStatus.textContent = 'Kamera açık.';
     stopButton.disabled = false;
   } catch (error) {
@@ -93,10 +133,16 @@ function stopCamera() {
   mediaStream?.getTracks().forEach((track) => track.stop());
   mediaStream = null;
   video.srcObject = null;
+  document.querySelector('#viewport').classList.remove('camera-active');
   cameraStatus.textContent = 'Kamera kapalı.';
   startButton.disabled = false;
   stopButton.disabled = true;
   handsContext.clearRect(0, 0, handsCanvas.width, handsCanvas.height);
+  maskBitmap?.close();
+  maskBitmap = null;
+  latestHands = [];
+  latestPose = [];
+  clearPersonOcclusion();
 }
 
 function resizeHandsCanvas() {
@@ -151,30 +197,74 @@ function drawHands(hands) {
 }
 
 function clearPersonOcclusion() {
+  if (!occlusionPainted) return;
+  personContext.setTransform(1, 0, 0, 1, 0, 0);
   personContext.clearRect(0, 0, personCanvas.width, personCanvas.height);
+  occlusionPainted = false;
+}
+
+/* ------------------------------------------------------------------ *
+ * Depth-aware person / hand occlusion
+ * ------------------------------------------------------------------ */
+
+function decodeMask(base64) {
+  if (maskDecodeInFlight || !base64) return;
+  maskDecodeInFlight = true;
+  // atob + createImageBitmap keeps the PNG decode off the main thread; the old
+  // `new Image()` with a data URL decoded synchronously on every frame.
+  let bytes;
+  try {
+    const binary = atob(base64);
+    bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  } catch {
+    maskDecodeInFlight = false;
+    return;
+  }
+
+  createImageBitmap(new Blob([bytes], { type: 'image/png' }))
+    .then((bitmap) => {
+      maskBitmap?.close();
+      maskBitmap = bitmap;
+    })
+    .catch(() => {})
+    .finally(() => { maskDecodeInFlight = false; });
+}
+
+/** Metres from the camera for one pose landmark, given the torso reference. */
+function landmarkDepthMetres(landmark, shoulderZ, personDepth) {
+  if (!landmark || !Number.isFinite(personDepth)) return null;
+  return personDepth + (landmark.z - shoulderZ) * VIEW_WIDTH_FACTOR * personDepth;
+}
+
+function handsInFrontOfModel(modelDepth, personDepth) {
+  if (latestPose.length < 17 || !Number.isFinite(personDepth)) return [];
+  const shoulderZ = (latestPose[11].z + latestPose[12].z) / 2;
+  const wristFor = { Left: latestPose[15], Right: latestPose[16] };
+  return latestHands.filter((hand) => {
+    const wrist = wristFor[hand.handedness];
+    if (!wrist || wrist.visibility < 0.3) return false;
+    const depth = landmarkDepthMetres(wrist, shoulderZ, personDepth);
+    return Number.isFinite(depth) && depth < modelDepth - DEPTH_HYSTERESIS_METRES;
+  });
 }
 
 function drawHandSilhouette(hands) {
-  handClipCanvas.width = 480;
-  handClipCanvas.height = 270;
-  handClipContext.clearRect(0, 0, 480, 270);
   handClipContext.fillStyle = 'white';
   handClipContext.strokeStyle = 'white';
-  handClipContext.lineCap = 'round';
-  handClipContext.lineJoin = 'round';
 
   for (const hand of hands) {
     if (!Array.isArray(hand.landmarks) || hand.landmarks.length < 21) continue;
     const point = (index) => ({
-      x: hand.landmarks[index].x * 480,
-      y: hand.landmarks[index].y * 270
+      x: hand.landmarks[index].x * COMPOSITE_WIDTH,
+      y: hand.landmarks[index].y * COMPOSITE_HEIGHT
     });
     const wrist = point(0);
     const middleMcp = point(9);
-    const palmSize = Math.max(12, Math.hypot(wrist.x - middleMcp.x, wrist.y - middleMcp.y));
+    const palmSize = Math.max(14, Math.hypot(wrist.x - middleMcp.x, wrist.y - middleMcp.y));
 
-    // Her parmak ayrı çizilir; aralarındaki boşluklar özellikle saydam bırakılır.
-    handClipContext.lineWidth = Math.max(7, palmSize * 0.34);
+    // Each finger is stroked separately so the gaps between them stay clear.
+    handClipContext.lineWidth = Math.max(9, palmSize * 0.34);
     for (const finger of [[0, 1, 2, 3, 4], [0, 5, 6, 7, 8], [0, 9, 10, 11, 12], [0, 13, 14, 15, 16], [0, 17, 18, 19, 20]]) {
       handClipContext.beginPath();
       const first = point(finger[0]);
@@ -186,7 +276,6 @@ function drawHandSilhouette(hands) {
       handClipContext.stroke();
     }
 
-    // Avuç içini doldur, fakat parmakların arasını tek bir daireyle kapatma.
     const palm = [0, 1, 5, 9, 13, 17].map(point);
     handClipContext.beginPath();
     handClipContext.moveTo(palm[0].x, palm[0].y);
@@ -196,71 +285,101 @@ function drawHandSilhouette(hands) {
   }
 }
 
-function drawPersonOcclusion(maskBase64, frameId, personInFront, handInFront, hands) {
-  if (!maskBase64 || (!personInFront && !handInFront) || !video.videoWidth || !video.videoHeight) {
+function paintOcclusion() {
+  const modelDepth = sharedState.modelDepthMeters;
+  const personDepth = sharedState.personDepthMeters;
+  if (!sharedState.anchored || !Number.isFinite(modelDepth) || !maskBitmap || !video.videoWidth) {
     clearPersonOcclusion();
     return;
   }
-  const maskImage = new Image();
-  maskImage.addEventListener('load', () => {
-    if (frameId < latestSegmentationFrame) return;
-    latestSegmentationFrame = frameId;
-    personFrameCanvas.width = 480;
-    personFrameCanvas.height = 270;
-    personFrameContext.globalCompositeOperation = 'source-over';
-    personFrameContext.clearRect(0, 0, 480, 270);
-    personFrameContext.save();
-    personFrameContext.translate(480, 0);
-    personFrameContext.scale(-1, 1);
-    personFrameContext.drawImage(video, 0, 0, 480, 270);
-    personFrameContext.restore();
-    personFrameContext.globalCompositeOperation = 'destination-in';
-    if (handInFront) {
-      drawHandSilhouette(hands);
-      personFrameContext.drawImage(handClipCanvas, 0, 0);
-    } else {
-      personFrameContext.drawImage(maskImage, 0, 0, 480, 270);
-    }
-    personFrameContext.globalCompositeOperation = 'source-over';
 
-    const ratio = Math.min(window.devicePixelRatio, 2);
-    const width = personCanvas.clientWidth;
-    const height = personCanvas.clientHeight;
-    personCanvas.width = Math.round(width * ratio);
-    personCanvas.height = Math.round(height * ratio);
-    personContext.setTransform(ratio, 0, 0, ratio, 0, 0);
-    const scale = Math.max(width / 480, height / 270);
-    const drawWidth = 480 * scale;
-    const drawHeight = 270 * scale;
-    personContext.clearRect(0, 0, width, height);
-    personContext.drawImage(
-      personFrameCanvas,
-      (width - drawWidth) / 2,
-      (height - drawHeight) / 2,
-      drawWidth,
-      drawHeight
-    );
-  }, { once: true });
-  maskImage.src = `data:image/png;base64,${maskBase64}`;
+  // Hysteresis on the whole-body test stops the model flickering in and out when
+  // the distance estimate jitters around the model plane.
+  if (Number.isFinite(personDepth)) {
+    personInFrontLatched = personInFrontLatched
+      ? personDepth < modelDepth + DEPTH_HYSTERESIS_METRES
+      : personDepth < modelDepth - DEPTH_HYSTERESIS_METRES;
+  } else {
+    personInFrontLatched = false;
+  }
+
+  const forwardHands = personInFrontLatched ? [] : handsInFrontOfModel(modelDepth, personDepth);
+  if (!personInFrontLatched && forwardHands.length === 0) {
+    clearPersonOcclusion();
+    return;
+  }
+
+  handClipContext.clearRect(0, 0, COMPOSITE_WIDTH, COMPOSITE_HEIGHT);
+  if (personInFrontLatched) {
+    handClipContext.drawImage(maskBitmap, 0, 0, COMPOSITE_WIDTH, COMPOSITE_HEIGHT);
+  } else {
+    drawHandSilhouette(forwardHands);
+  }
+
+  personFrameContext.globalCompositeOperation = 'source-over';
+  personFrameContext.clearRect(0, 0, COMPOSITE_WIDTH, COMPOSITE_HEIGHT);
+  personFrameContext.save();
+  personFrameContext.translate(COMPOSITE_WIDTH, 0);
+  personFrameContext.scale(-1, 1);
+  personFrameContext.drawImage(video, 0, 0, COMPOSITE_WIDTH, COMPOSITE_HEIGHT);
+  personFrameContext.restore();
+  personFrameContext.globalCompositeOperation = 'destination-in';
+  personFrameContext.drawImage(handClipCanvas, 0, 0);
+  personFrameContext.globalCompositeOperation = 'source-over';
+
+  const ratio = Math.min(window.devicePixelRatio, 2);
+  const width = personCanvas.clientWidth;
+  const height = personCanvas.clientHeight;
+  const targetWidth = Math.round(width * ratio);
+  const targetHeight = Math.round(height * ratio);
+  if (personCanvas.width !== targetWidth || personCanvas.height !== targetHeight) {
+    personCanvas.width = targetWidth;
+    personCanvas.height = targetHeight;
+  }
+  personContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+  personContext.clearRect(0, 0, width, height);
+  const scale = Math.max(width / COMPOSITE_WIDTH, height / COMPOSITE_HEIGHT);
+  const drawWidth = COMPOSITE_WIDTH * scale;
+  const drawHeight = COMPOSITE_HEIGHT * scale;
+  personContext.drawImage(
+    personFrameCanvas,
+    (width - drawWidth) / 2,
+    (height - drawHeight) / 2,
+    drawWidth,
+    drawHeight
+  );
+  occlusionPainted = true;
 }
 
-window.addEventListener('person-occlusion', (event) => {
-  drawPersonOcclusion(
-    event.detail.segmentationMask,
-    event.detail.frameId,
-    event.detail.personInFront,
-    event.detail.handInFront,
-    event.detail.hands ?? []
-  );
-  if (event.detail.personInFront) {
-    personStatus.className = 'status person-foreground';
-    personStatus.textContent = `Modelin önündesiniz · Siz: ${Math.round(event.detail.personDistanceMeters * 100)} cm · Model: ${Math.round(event.detail.modelDistanceMeters * 100)} cm`;
-  } else if (Number.isFinite(event.detail.modelDistanceMeters)
-      && Number.isFinite(event.detail.personDistanceMeters)) {
-    personStatus.className = 'status person-detected';
-    personStatus.textContent = `Modelin arkasındasınız · Siz: ${Math.round(event.detail.personDistanceMeters * 100)} cm · Model: ${Math.round(event.detail.modelDistanceMeters * 100)} cm`;
+function occlusionLoop() {
+  requestAnimationFrame(occlusionLoop);
+  const now = performance.now();
+  if (now - lastOcclusionDraw < OCCLUSION_FRAME_BUDGET_MS) return;
+  lastOcclusionDraw = now;
+  paintOcclusion();
+}
+
+function describePresence() {
+  const modelDepth = sharedState.modelDepthMeters;
+  const personDepth = sharedState.personDepthMeters;
+  if (!Number.isFinite(personDepth)) {
+    personStatus.className = 'status person-searching';
+    personStatus.textContent = 'Kişi aranıyor… Omuzlarınızı kamerada gösterin.';
+    return;
   }
-});
+  if (!sharedState.anchored || !Number.isFinite(modelDepth)) {
+    personStatus.className = 'status person-detected';
+    personStatus.textContent = `Kişi algılandı · Yaklaşık mesafe: ${Math.round(personDepth * 100)} cm`;
+    return;
+  }
+  const inFront = personDepth < modelDepth;
+  personStatus.className = `status ${inFront ? 'person-foreground' : 'person-detected'}`;
+  personStatus.textContent = `${inFront ? 'Modelin önündesiniz' : 'Modelin arkasındasınız'} · Siz: ${Math.round(personDepth * 100)} cm · Model: ${Math.round(modelDepth * 100)} cm`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Shoulder assets
+ * ------------------------------------------------------------------ */
 
 function normalizedPointToViewport(landmark) {
   const width = handsCanvas.clientWidth;
@@ -330,6 +449,10 @@ function clearShoulderImages() {
   }
   presentationStatus.textContent = 'Sunum görselleri kaldırıldı.';
 }
+
+/* ------------------------------------------------------------------ *
+ * Recording
+ * ------------------------------------------------------------------ */
 
 function preferredRecordingMimeType() {
   return [
@@ -433,12 +556,6 @@ async function startRecording() {
   }
 }
 
-togglePanelButton.addEventListener('click', () => {
-  const collapsed = controlPanel.classList.toggle('collapsed');
-  togglePanelButton.setAttribute('aria-expanded', String(!collapsed));
-  togglePanelButton.title = collapsed ? 'Kontrol panelini aç' : 'Kontrol panelini daralt';
-});
-
 function stopRecording() {
   if (!mediaRecorder || mediaRecorder.state !== 'recording') return;
   const seconds = Math.max(1, Math.round((Date.now() - recordingStartedAt) / 1000));
@@ -447,12 +564,39 @@ function stopRecording() {
   mediaRecorder.stop();
 }
 
+/* ------------------------------------------------------------------ *
+ * Panel chrome
+ * ------------------------------------------------------------------ */
+
+togglePanelButton.addEventListener('click', () => {
+  const collapsed = controlPanel.classList.toggle('collapsed');
+  togglePanelButton.setAttribute('aria-expanded', String(!collapsed));
+  togglePanelButton.title = collapsed ? 'Kontrol panelini aç' : 'Kontrol panelini daralt';
+});
+
+toolTabs.forEach((tab) => {
+  tab.addEventListener('click', () => {
+    const target = tab.dataset.panel;
+    toolTabs.forEach((candidate) => candidate.classList.toggle('active', candidate === tab));
+    toolPages.forEach((page) => {
+      const isActive = page.dataset.page === target;
+      page.classList.toggle('active', isActive);
+      page.hidden = !isActive;
+    });
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Backend stream
+ * ------------------------------------------------------------------ */
+
 async function connectBackend() {
   const { backendUrl } = await window.desktopApi.getRuntimeInfo();
   gestureSocket = new WebSocket(backendUrl);
 
   gestureSocket.addEventListener('open', () => {
     backendStatus.textContent = 'Backend: bağlandı';
+    backendStatus.classList.add('connected');
   });
   gestureSocket.addEventListener('message', (event) => {
     try {
@@ -461,15 +605,15 @@ async function connectBackend() {
         backendStatus.textContent = `Backend: ${message.message}`;
       } else if (message.type === 'hands') {
         frameInFlight = false;
-        drawHands(message.hands);
-        updateShoulderAssets(message.pose ?? []);
-        const personDetected = Number.isFinite(message.personDistanceMeters);
-        personStatus.className = `status ${personDetected ? 'person-detected' : 'person-searching'}`;
-        personStatus.textContent = personDetected
-          ? `Kişi algılandı · Yaklaşık mesafe: ${Math.round(message.personDistanceMeters * 100)} cm · ${message.segmentationMask ? 'Maske hazır' : 'Maske bekleniyor'}`
-          : 'Kişi aranıyor… Omuzlarınızı kamerada gösterin.';
+        latestHands = message.hands ?? [];
+        latestPose = message.pose ?? [];
+        drawHands(latestHands);
+        updateShoulderAssets(latestPose);
+        if (message.segmentationMask) decodeMask(message.segmentationMask);
         window.dispatchEvent(new CustomEvent('hand-landmarks', { detail: message }));
-        backendStatus.textContent = `El takibi: ${message.hands.length} el · ${message.processingMs} ms`;
+        describePresence();
+        const boost = message.lowLightBoosted ? ' · ışık artırıldı' : '';
+        backendStatus.textContent = `El takibi: ${latestHands.length} el · ${message.processingMs} ms${boost}`;
       } else if (message.type === 'error') {
         frameInFlight = false;
         backendStatus.textContent = `Backend hatası: ${message.code}`;
@@ -483,11 +627,13 @@ async function connectBackend() {
     frameInFlight = false;
     if (isShuttingDown) return;
     backendStatus.textContent = 'Backend: bağlantı kesildi; yeniden deneniyor…';
+    backendStatus.classList.remove('connected');
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => void connectBackend(), 2000);
   });
   gestureSocket.addEventListener('error', () => {
     backendStatus.textContent = 'Backend: erişilemiyor';
+    backendStatus.classList.remove('connected');
   });
 }
 
@@ -495,12 +641,10 @@ function sendCameraFrame() {
   if (!mediaStream || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
   if (!gestureSocket || gestureSocket.readyState !== WebSocket.OPEN || frameInFlight) return;
 
-  captureCanvas.width = 480;
-  captureCanvas.height = 270;
   captureContext.save();
-  captureContext.translate(captureCanvas.width, 0);
+  captureContext.translate(CAPTURE_WIDTH, 0);
   captureContext.scale(-1, 1);
-  captureContext.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+  captureContext.drawImage(video, 0, 0, CAPTURE_WIDTH, CAPTURE_HEIGHT);
   captureContext.restore();
 
   frameInFlight = true;
@@ -510,8 +654,12 @@ function sendCameraFrame() {
       return;
     }
     gestureSocket.send(blob);
-  }, 'image/jpeg', 0.68);
+  }, 'image/jpeg', CAPTURE_QUALITY);
 }
+
+/* ------------------------------------------------------------------ *
+ * Wiring
+ * ------------------------------------------------------------------ */
 
 startButton.addEventListener('click', startCamera);
 stopButton.addEventListener('click', stopCamera);
@@ -528,7 +676,8 @@ window.addEventListener('beforeunload', () => {
 void connectBackend().catch(() => {
   backendStatus.textContent = 'Backend: bağlantı başlatılamadı';
 });
-setInterval(sendCameraFrame, 125);
+setInterval(sendCameraFrame, CAPTURE_INTERVAL_MS);
+occlusionLoop();
 
 chooseModelButton.addEventListener('click', () => {
   modelStatus.textContent = 'Dosya seçici açılıyor…';

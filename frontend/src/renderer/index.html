@@ -3,78 +3,227 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: ws://127.0.0.1:8765; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
-    <title>Gesture 3D Viewer</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob: ws://127.0.0.1:8765 http://127.0.0.1:8765; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+    <title>Byeza Studio</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
     <main id="viewport" aria-label="3B görüntüleme alanı">
-      <div class="space-decor" aria-hidden="true">
-        <span class="orbit orbit-a">★</span><span class="orbit orbit-b">🪐</span>
-        <span class="orbit orbit-c">🚀</span><span class="orbit orbit-d">✦</span>
-        <span class="orbit orbit-e">⚛</span><span class="orbit orbit-f">🌌</span>
-        <span class="orbit orbit-g">☄</span><span class="orbit orbit-h">🔭</span>
-      </div>
+      <div class="space-decor" aria-hidden="true"></div>
       <video id="camera" autoplay playsinline muted aria-label="Webcam görüntüsü"></video>
       <canvas id="scene" aria-label="Three.js sahnesi"></canvas>
       <canvas id="person-occlusion" aria-label="Kişi örtüşme katmanı"></canvas>
       <img id="left-shoulder-asset" class="shoulder-asset" alt="Sol omuz sunum görseli">
       <img id="right-shoulder-asset" class="shoulder-asset" alt="Sağ omuz sunum görseli">
       <canvas id="hands" aria-label="El landmark önizlemesi"></canvas>
-      <section id="control-panel" class="panel">
+
+      <header class="app-bar">
+        <div class="brand-mark" aria-hidden="true">B</div>
+        <div class="brand-copy"><strong>Byeza Studio</strong><span>Gesture workspace</span></div>
+        <div class="runtime-pills" aria-label="Sistem durumu">
+          <span id="model-size-pill" class="status-pill size-pill" aria-live="polite" hidden>— × — × —</span>
+          <span id="model-scale-pill" class="status-pill scale-pill" aria-live="polite" hidden>%100</span>
+          <span id="model-depth-pill" class="status-pill depth-pill" aria-live="polite" hidden>Model — cm</span>
+          <span id="backend-status" class="status-pill">Backend bağlanıyor…</span>
+          <span class="status-pill local-pill">Yerel çalışma</span>
+        </div>
+      </header>
+
+      <section class="scene-empty" aria-hidden="true">
+        <div class="scene-icon">3D</div>
+        <strong>Sahnen hazır</strong>
+        <span>Başlamak için bir model yükle veya kamerayı aç</span>
+      </section>
+
+      <aside id="control-panel" class="panel" aria-label="Araç paneli">
         <div class="panel-header">
-          <h1>Gesture 3D Viewer</h1>
-          <button id="toggle-panel" class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-content" title="Kontrol panelini daralt">‹</button>
+          <div><span class="eyebrow">ÇALIŞMA ALANI</span><h1>Kontrol merkezi</h1></div>
+          <button id="toggle-panel" class="panel-toggle icon-button" type="button" aria-expanded="true" aria-controls="panel-content" title="Kontrol panelini daralt">›</button>
         </div>
         <div id="panel-content" class="panel-content">
-        <p id="camera-status">Kamera kapalı. Görüntüyü başlatmak için açıkça izin verin.</p>
-        <p id="person-status" class="status person-searching">Kişi ve mesafe algılaması kamera açılınca başlar.</p>
-        <div class="actions">
-          <button id="start-camera" type="button">Kameraya izin ver ve başlat</button>
-          <button id="stop-camera" type="button" disabled>Kamerayı durdur</button>
+          <nav class="tool-tabs" aria-label="Araçlar">
+            <button class="tool-tab active" type="button" data-panel="capture">Kamera</button>
+            <button class="tool-tab" type="button" data-panel="model">3B Model</button>
+            <button class="tool-tab" type="button" data-panel="fabricate">Üretim</button>
+            <button class="tool-tab" type="button" data-panel="assistant">Asistan</button>
+            <button class="tool-tab" type="button" data-panel="present">Sunum</button>
+          </nav>
+
+          <section class="tool-page active" data-page="capture">
+            <div class="section-heading">
+              <span class="section-icon camera-icon" aria-hidden="true"></span>
+              <div><h2>Kamera ve takip</h2><p>Canlı görüntüden el ve beden hareketlerini yakala.</p></div>
+            </div>
+            <div class="status-card"><p id="camera-status">Kamera kapalı. Başlatmak için izin verin.</p><p id="person-status" class="status person-searching">Kişi algılama kamera açılınca başlar.</p></div>
+            <div class="actions split-actions">
+              <button id="start-camera" class="primary-action" type="button">Kamerayı başlat</button>
+              <button id="stop-camera" class="secondary-action" type="button" disabled>Durdur</button>
+            </div>
+            <div class="section-divider"></div>
+            <div class="section-heading compact">
+              <span class="section-icon record-icon" aria-hidden="true"></span>
+              <div><h2>Stüdyo kaydı</h2><p>Sahneyi ve anlatımını WebM olarak kaydet.</p></div>
+            </div>
+            <p id="recording-status" class="status-card">Kayıt hazır.</p>
+            <label class="recording-option">
+              <input id="record-microphone" type="checkbox" checked>
+              <span><strong>Mikrofonu dahil et</strong><small>Anlatım sesini kayda ekler</small></span>
+            </label>
+            <div class="actions split-actions">
+              <button id="start-recording" class="primary-action record-button" type="button">Kaydı başlat</button>
+              <button id="stop-recording" class="secondary-action" type="button" disabled>Durdur ve kaydet</button>
+            </div>
+          </section>
+
+          <section class="tool-page" data-page="model" hidden>
+            <div class="section-heading">
+              <span class="section-icon cube-icon" aria-hidden="true"></span>
+              <div><h2>3B model</h2><p>GLB, STL veya OBJ dosyanı sahneye yerleştir.</p></div>
+            </div>
+            <p id="model-status" class="status-card">Henüz model yüklenmedi.</p>
+            <div class="model-list-heading">
+              <span>Sahnedeki modeller</span>
+              <span id="model-count" class="count-badge">0</span>
+            </div>
+            <div id="model-list" class="model-list" aria-live="polite">
+              <p class="empty-list">Eklediğin modeller burada listelenecek.</p>
+            </div>
+            <button id="choose-model" class="drop-zone" type="button"><span class="drop-icon">＋</span><strong>3B model yükle</strong><small>GLB · STL · OBJ</small></button>
+            <input id="model-file" type="file" accept=".glb,.stl,.obj,model/gltf-binary,model/stl,model/obj">
+
+            <div class="section-divider"></div>
+            <div class="section-heading compact">
+              <span class="section-icon ruler-icon" aria-hidden="true"></span>
+              <div><h2>Ölçü ve boyut</h2><p>Gerçek dünya ölçüleri ve büyütme oranı.</p></div>
+            </div>
+            <div class="field-row">
+              <label for="model-unit">Dosya birimi</label>
+              <select id="model-unit" disabled>
+                <option value="mm">1 birim = 1 mm</option>
+                <option value="cm">1 birim = 1 cm</option>
+                <option value="m">1 birim = 1 m</option>
+                <option value="in">1 birim = 1 inç</option>
+              </select>
+            </div>
+            <div class="scale-row">
+              <button id="scale-down" class="secondary-action scale-step" type="button" disabled aria-label="Küçült">−</button>
+              <label class="scale-field"><input id="scale-input" type="number" min="2" max="5000" step="0.5" value="100" disabled><span>%</span></label>
+              <button id="scale-up" class="secondary-action scale-step" type="button" disabled aria-label="Büyüt">+</button>
+              <button id="scale-reset" class="secondary-action" type="button" disabled>%100</button>
+            </div>
+            <div id="dimension-readout" class="dimension-readout" aria-live="polite">Model yüklenince ölçüler burada görünür.</div>
+
+            <div class="section-divider"></div>
+            <div class="section-heading compact">
+              <span class="section-icon explode-icon" aria-hidden="true"></span>
+              <div><h2>Patlatılmış görünüm</h2><p>Parçaları ayırıp içini incele.</p></div>
+            </div>
+            <div class="slider-row">
+              <input id="explode-slider" type="range" min="0" max="100" value="0" step="1" disabled aria-label="Parça ayrılma oranı">
+              <span id="explode-value" class="slider-value">%0</span>
+            </div>
+            <button id="assemble-model" class="secondary-action full-width" type="button" disabled>Parçaları birleştir</button>
+
+            <div class="section-divider"></div>
+            <div class="control-grid">
+              <button id="reset-view" class="secondary-action" type="button" disabled>Görünümü sıfırla</button>
+              <button id="toggle-wireframe" class="secondary-action" type="button" disabled>Tel kafes: kapalı</button>
+              <button id="toggle-rotation" class="secondary-action" type="button" disabled>Otomatik döndür: kapalı</button>
+              <button id="toggle-animation" class="secondary-action" type="button" disabled>Animasyonu oynat</button>
+            </div>
+            <button id="two-hand-mode" class="secondary-action full-width is-on" type="button">İki el: model boyutu</button>
+            <button id="toggle-gestures" class="gesture-switch" type="button" disabled>
+              <span><strong>El kontrolü</strong><small id="gesture-status">Önce bir model yükleyin.</small></span>
+              <span class="switch-track" aria-hidden="true"><span></span></span>
+            </button>
+            <details class="gesture-guide"><summary>Jest rehberi</summary><ul>
+              <li><span>✋</span>Açık avuçla modeli döndür</li>
+              <li><span>🤏</span>Pinch ile modeli tut ve sürükle</li>
+              <li><span>↔</span>İki el arasındaki mesafeyle boyutlandır</li>
+              <li><span>🖖</span>Spock ile modeli uzaya sabitle</li>
+              <li><span>✊</span>Yumruk sonra açık el: modeli toza çevir</li>
+              <li><span>👏</span>İki eli birleştir: modeli geri getir</li>
+            </ul></details>
+          </section>
+
+          <section class="tool-page" data-page="fabricate" hidden>
+            <div class="section-heading">
+              <span class="section-icon print-icon" aria-hidden="true"></span>
+              <div><h2>3B yazıcı çıktısı</h2><p>Ekrandaki ölçeğiyle G-code üret.</p></div>
+            </div>
+            <p id="gcode-status" class="status-card">Etkin modelin güncel boyutundan G-code üretilir.</p>
+            <div class="field-grid">
+              <label>Katman (mm)<input id="gcode-layer-height" type="number" min="0.05" max="1" step="0.01" value="0.2"></label>
+              <label>Nozul (mm)<input id="gcode-nozzle" type="number" min="0.1" max="1.2" step="0.05" value="0.4"></label>
+              <label>Filament (mm)<input id="gcode-filament" type="number" min="1" max="3.5" step="0.05" value="1.75"></label>
+              <label>Hız (mm/s)<input id="gcode-speed" type="number" min="5" max="200" step="1" value="40"></label>
+              <label>Nozul °C<input id="gcode-nozzle-temp" type="number" min="150" max="320" step="5" value="210"></label>
+              <label>Tabla °C<input id="gcode-bed-temp" type="number" min="0" max="130" step="5" value="60"></label>
+            </div>
+            <div class="field-grid">
+              <label>Tabla G (mm)<input id="gcode-bed-width" type="number" min="50" max="800" step="5" value="220"></label>
+              <label>Tabla D (mm)<input id="gcode-bed-depth" type="number" min="50" max="800" step="5" value="220"></label>
+              <label>Tabla Y (mm)<input id="gcode-bed-height" type="number" min="50" max="800" step="5" value="250"></label>
+            </div>
+            <button id="export-gcode" class="primary-action full-width" type="button" disabled>G-code oluştur ve kaydet</button>
+            <p class="fine-print">Üretilen dosya tek duvarlı (kontur) baskı içindir: dolgu, üst/alt yüzey ve destek üretilmez. Dolgu gereken parçalar için STL’i dilimleyicinde aç.</p>
+          </section>
+
+          <section class="tool-page" data-page="assistant" hidden>
+            <div class="section-heading">
+              <span class="section-icon ai-icon" aria-hidden="true"></span>
+              <div><h2>Sahne asistanı</h2><p>Yazarak modelin rengini, boyutunu ve konumunu değiştir.</p></div>
+            </div>
+            <p id="ai-status" class="status-card">Asistan hazırlanıyor…</p>
+            <div id="ai-log" class="ai-log" aria-live="polite" role="log">
+              <div class="ai-message ai-assistant"><p>Merhaba! Modelini yükledikten sonra “kırmızı yap”, “yüzde 40 büyüt” ya da “parçalara ayır” gibi yazabilirsin.</p></div>
+            </div>
+            <div class="ai-chips">
+              <button class="ai-chip" type="button" data-prompt="modeli kırmızı yap">kırmızı yap</button>
+              <button class="ai-chip" type="button" data-prompt="yüzde 40 büyüt">%40 büyüt</button>
+              <button class="ai-chip" type="button" data-prompt="parçalara ayır">parçalara ayır</button>
+              <button class="ai-chip" type="button" data-prompt="birleştir">birleştir</button>
+              <button class="ai-chip" type="button" data-prompt="yarı saydam yap">yarı saydam</button>
+              <button class="ai-chip" type="button" data-prompt="y ekseninde 90 derece döndür">90° döndür</button>
+            </div>
+            <div class="ai-compose">
+              <textarea id="ai-input" rows="2" placeholder="Örn: modeli mavi yap ve yüzde 25 büyüt"></textarea>
+              <button id="ai-send" class="primary-action" type="button">Gönder</button>
+            </div>
+            <p class="fine-print">Komutlar çevrimdışı yorumlanır. ANTHROPIC_API_KEY tanımlıysa backend üzerinden Claude kullanılır.</p>
+          </section>
+
+          <section class="tool-page" data-page="present" hidden>
+            <div class="section-heading">
+              <span class="section-icon present-icon" aria-hidden="true"></span>
+              <div><h2>Canlı sunum</h2><p>Referans görsellerini omuzlarına sabitle.</p></div>
+            </div>
+            <p id="presentation-status" class="status-card">Sunum görselleri seçilmedi.</p>
+            <div class="meeting-heading"><span>Toplantı uygulamaları</span><small>Görsel önizleme</small></div>
+            <div class="meeting-grid" aria-label="Toplantı uygulaması seçenekleri">
+              <button class="meeting-card zoom-card" type="button" aria-label="Zoom bağlantısı (yakında)" title="Zoom bağlantısı yakında">
+                <span class="meeting-logo zoom-logo" aria-hidden="true"><span></span></span>
+                <span><strong>Zoom</strong><small>Bağlantı seçeneği</small></span>
+              </button>
+              <button class="meeting-card teams-card" type="button" aria-label="Microsoft Teams bağlantısı (yakında)" title="Teams bağlantısı yakında">
+                <span class="meeting-logo teams-logo" aria-hidden="true">T</span>
+                <span><strong>Teams</strong><small>Bağlantı seçeneği</small></span>
+              </button>
+            </div>
+            <div class="section-divider presentation-divider"></div>
+            <div class="asset-grid">
+              <button id="choose-left-image" class="asset-slot" type="button"><span>＋</span><strong>Sol görsel</strong><small>PNG, JPG, WebP</small></button>
+              <input id="left-image-file" class="hidden-file" type="file" accept="image/png,image/jpeg,image/webp">
+              <button id="choose-right-image" class="asset-slot" type="button"><span>＋</span><strong>Sağ görsel</strong><small>PNG, JPG, WebP</small></button>
+              <input id="right-image-file" class="hidden-file" type="file" accept="image/png,image/jpeg,image/webp">
+            </div>
+            <button id="clear-images" class="secondary-action full-width" type="button">Görselleri kaldır</button>
+            <p class="fine-print">Her dosya en fazla 20 MB olabilir.</p>
+          </section>
         </div>
-        <p id="backend-status" class="status">Backend: kontrol ediliyor…</p>
-        <hr>
-        <h2>3B model</h2>
-        <p id="model-status" class="status">Henüz model yüklenmedi. Yerel bir GLB, STL veya OBJ dosyası seçin.</p>
-        <div class="actions model-actions">
-          <button id="choose-model" type="button">3B model yükle</button>
-          <input id="model-file" type="file" accept=".glb,.stl,.obj,model/gltf-binary,model/stl,model/obj">
-          <button id="reset-view" type="button" disabled>Görünümü sıfırla</button>
-          <button id="toggle-wireframe" type="button" disabled>Tel kafes: kapalı</button>
-          <button id="toggle-rotation" type="button" disabled>Otomatik döndür: kapalı</button>
-          <button id="toggle-animation" type="button" disabled>Animasyonu oynat</button>
-          <button id="toggle-gestures" type="button" disabled>El kontrolü: kapalı</button>
-        </div>
-        <p id="gesture-status" class="status">Jest kontrolü için önce model yükleyin.</p>
-        <p class="hint">Açık tek el: döndür · Başparmak + işaret parmağı: tut ve sürükle</p>
-        <p class="hint">İki eli yaklaştır/uzaklaştır: zoom</p>
-        <p class="hint">Spock/Vulcan selamını 1 saniye sabit tut: modeli kilitle/aç. Yeniden tetiklemek için elini indir.</p>
-        <p class="hint">Fare: sol döndür · Tekerlek yakınlaştır · Sağ kaydır</p>
-        <hr>
-        <h2>Canlı sunum</h2>
-        <p id="presentation-status" class="status">Omuzlara sabitlemek için iki görsel seçebilirsiniz.</p>
-        <div class="actions model-actions">
-          <button id="choose-left-image" type="button">Sol görseli seç</button>
-          <input id="left-image-file" class="hidden-file" type="file" accept="image/png,image/jpeg,image/webp">
-          <button id="choose-right-image" type="button">Sağ görseli seç</button>
-          <input id="right-image-file" class="hidden-file" type="file" accept="image/png,image/jpeg,image/webp">
-          <button id="clear-images" type="button">Görselleri kaldır</button>
-        </div>
-        <p class="hint">PNG, JPG veya WebP · Her dosya en fazla 20 MB</p>
-        <hr>
-        <h2>Video kayıt</h2>
-        <p id="recording-status" class="status">Kayıt kapalı. Uygulama görüntüsü ve mikrofon kaydedilir.</p>
-        <label class="recording-option">
-          <input id="record-microphone" type="checkbox" checked>
-          Anlatım sesini mikrofondan kaydet
-        </label>
-        <div class="actions model-actions">
-          <button id="start-recording" type="button">Kaydı başlat</button>
-          <button id="stop-recording" type="button" disabled>Kaydı durdur ve kaydet</button>
-        </div>
-        </div>
-      </section>
+      </aside>
+
+      <footer class="scene-hud"><span><kbd>Sol tık</kbd> Döndür</span><span><kbd>Sağ tık</kbd> Kaydır</span><span><kbd>Kaydır</kbd> Yakınlaştır</span></footer>
     </main>
     <script src="/boot.js" defer></script>
     <script src="/renderer.bundle.js" defer></script>

@@ -3,6 +3,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { DEFAULT_PRINT_SETTINGS, sliceToGcode } from './gcode.js';
+import { describeAction, interpretLocally } from './ai-commands.js';
 
 const canvas = document.querySelector('#scene');
 const modelStatus = document.querySelector('#model-status');
@@ -13,6 +15,48 @@ const animationButton = document.querySelector('#toggle-animation');
 const gestureButton = document.querySelector('#toggle-gestures');
 const gestureStatus = document.querySelector('#gesture-status');
 const videoElement = document.querySelector('#camera');
+const modelList = document.querySelector('#model-list');
+const modelCount = document.querySelector('#model-count');
+
+const sizePill = document.querySelector('#model-size-pill');
+const scalePill = document.querySelector('#model-scale-pill');
+const depthPill = document.querySelector('#model-depth-pill');
+const unitSelect = document.querySelector('#model-unit');
+const scaleInput = document.querySelector('#scale-input');
+const scaleDownButton = document.querySelector('#scale-down');
+const scaleUpButton = document.querySelector('#scale-up');
+const scaleResetButton = document.querySelector('#scale-reset');
+const twoHandModeButton = document.querySelector('#two-hand-mode');
+const dimensionReadout = document.querySelector('#dimension-readout');
+
+const explodeSlider = document.querySelector('#explode-slider');
+const explodeValue = document.querySelector('#explode-value');
+const assembleButton = document.querySelector('#assemble-model');
+
+const gcodeButton = document.querySelector('#export-gcode');
+const gcodeStatus = document.querySelector('#gcode-status');
+const gcodeLayerHeight = document.querySelector('#gcode-layer-height');
+const gcodeNozzle = document.querySelector('#gcode-nozzle');
+const gcodeFilament = document.querySelector('#gcode-filament');
+const gcodeNozzleTemp = document.querySelector('#gcode-nozzle-temp');
+const gcodeBedTemp = document.querySelector('#gcode-bed-temp');
+const gcodeBedWidth = document.querySelector('#gcode-bed-width');
+const gcodeBedDepth = document.querySelector('#gcode-bed-depth');
+const gcodeBedHeight = document.querySelector('#gcode-bed-height');
+const gcodeSpeed = document.querySelector('#gcode-speed');
+
+const aiLog = document.querySelector('#ai-log');
+const aiInput = document.querySelector('#ai-input');
+const aiSend = document.querySelector('#ai-send');
+const aiStatus = document.querySelector('#ai-status');
+const aiChips = [...document.querySelectorAll('.ai-chip')];
+
+// Shared with boot.js so the occlusion compositor can read live depth without a
+// DOM event per animation frame.
+const sharedState = (window.__BYEZA__ = window.__BYEZA__ ?? {});
+sharedState.modelDepthMeters = null;
+sharedState.personDepthMeters = null;
+sharedState.anchored = false;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
@@ -52,7 +96,6 @@ let autoRotateEnabled = false;
 let gestureEnabled = false;
 let gestureMode = 'idle';
 let smoothedCenters = [];
-let previousSingleCenter = null;
 let previousPalmQuaternion = null;
 let smoothedPalmQuaternion = null;
 let previousTwoHandDistance = null;
@@ -70,13 +113,8 @@ let baseModelQuaternion = null;
 let baseModelPosition = null;
 let modelRadius = 1;
 const modelVelocity = new THREE.Vector3();
-let presentationLocked = false;
 let spockLatched = false;
-let lockRestoreState = null;
-let lockedModelDistanceMeters = null;
-let lockedPersonDistanceMeters = null;
 let smoothedPersonDistanceMeters = null;
-let personIsInFront = false;
 let spockReleasedAt = 0;
 let spockEvidence = 0;
 let fistEvidence = 0;
@@ -88,26 +126,46 @@ let clapEvidence = 0;
 let clapLatched = false;
 const raycaster = new THREE.Raycaster();
 
+// Spatial anchor ("4B evren"): the model gets a real-world depth and, while
+// auto-rotate is on, orbits through that depth so it can pass behind the user.
+let anchored = false;
+const anchorCenter = new THREE.Vector3();
+let anchorDepthMeters = 1.2;
+let anchorOrbitRadius = 0;
+let metresPerSceneUnit = 1;
+let orbitPhase = 0;
+let anchorRestoreState = null;
+
+let twoHandMode = 'scale';
+let heldHands = [];
+let heldHandFrames = 0;
+let assistantAvailable = false;
+let slicingInProgress = false;
+
 const GESTURE_SMOOTHING = 0.28;
-const ROTATION_DEAD_ZONE = 0.0015;
-const MAX_ROTATION_DELTA = 0.022;
-const ROTATION_SPEED = 2.15;
-const ZOOM_DEAD_ZONE = 0.012;
+const ZOOM_DEAD_ZONE = 0.008;
 const MAX_ZOOM_LOG_DELTA = 0.09;
-const PINCH_START_RATIO = 0.56;
-const PINCH_RELEASE_RATIO = 0.88;
-const PINCH_CONFIRM_FRAMES = 3;
-const PINCH_RELEASE_FRAMES = 4;
-const HAND_LOST_GRACE_FRAMES = 3;
-const DRAG_DEAD_ZONE = 0.004;
-const MAX_DRAG_DELTA = 0.025;
-const SPOCK_REQUIRED_EVIDENCE = 6;
+const PINCH_START_RATIO = 0.62;
+const PINCH_RELEASE_RATIO = 0.95;
+const PINCH_CONFIRM_FRAMES = 2;
+const PINCH_RELEASE_FRAMES = 5;
+const HAND_LOST_GRACE_FRAMES = 6;
+const HAND_HOLD_FRAMES = 4;
+const SPOCK_REQUIRED_EVIDENCE = 5;
 const SPOCK_RELEASE_MS = 450;
 const FIST_REQUIRED_EVIDENCE = 3;
 const OPEN_AFTER_FIST_FRAMES = 2;
 const FIST_SEQUENCE_TIMEOUT_MS = 2200;
 const CLAP_REQUIRED_EVIDENCE = 2;
 const CLAP_DISTANCE_RATIO = 1.45;
+const MIN_USER_SCALE = 0.02;
+const MAX_USER_SCALE = 50;
+const ORBIT_ANGULAR_SPEED = 0.55;
+const DEPTH_HYSTERESIS_METRES = 0.06;
+
+const MILLIMETRES_PER_UNIT = new Map([
+  ['mm', 1], ['cm', 10], ['m', 1000], ['in', 25.4]
+]);
 
 function disposeMaterial(material) {
   for (const value of Object.values(material)) {
@@ -116,23 +174,191 @@ function disposeMaterial(material) {
   material.dispose();
 }
 
-function removeCurrentModel() {
-  clearDustEffect();
-  if (!model) return;
-  scene.remove(model);
-  model.traverse((object) => {
+function disposeModel(targetModel) {
+  scene.remove(targetModel);
+  targetModel.traverse((object) => {
     if (!object.isMesh) return;
     object.geometry?.dispose();
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     materials.filter(Boolean).forEach(disposeMaterial);
   });
-  mixer = null;
-  animationAction = null;
-  baseModelQuaternion = null;
-  baseModelPosition = null;
-  modelVelocity.set(0, 0, 0);
-  model = null;
 }
+
+/* ------------------------------------------------------------------ *
+ * Measurements: real-world size and scale percentage
+ * ------------------------------------------------------------------ */
+
+function millimetresPerUnitFor(targetModel) {
+  const state = modelStates.get(targetModel);
+  return MILLIMETRES_PER_UNIT.get(state?.unit ?? 'mm') ?? 1;
+}
+
+function formatLength(millimetres) {
+  if (!Number.isFinite(millimetres)) return '—';
+  if (millimetres >= 1000) return `${(millimetres / 1000).toFixed(3)} m`;
+  if (millimetres >= 10) return `${(millimetres / 10).toFixed(2)} cm`;
+  return `${millimetres.toFixed(2)} mm`;
+}
+
+function currentDimensions(targetModel = model) {
+  const state = modelStates.get(targetModel);
+  if (!state?.baseSize) return null;
+  const factor = state.userScale * millimetresPerUnitFor(targetModel);
+  return {
+    x: state.baseSize.x * factor,
+    y: state.baseSize.y * factor,
+    z: state.baseSize.z * factor,
+    percent: state.userScale * 100
+  };
+}
+
+function updateDimensionReadout() {
+  const dimensions = currentDimensions();
+  const state = modelStates.get(model);
+  if (!dimensions || !state) {
+    sizePill.hidden = true;
+    scalePill.hidden = true;
+    if (dimensionReadout) dimensionReadout.textContent = 'Model yüklenince ölçüler burada görünür.';
+    return;
+  }
+
+  const asText = `${formatLength(dimensions.x)} × ${formatLength(dimensions.y)} × ${formatLength(dimensions.z)}`;
+
+  sizePill.hidden = false;
+  sizePill.textContent = asText;
+  sizePill.title = `${state.name} · G × Y × D`;
+  scalePill.hidden = false;
+  scalePill.textContent = `%${dimensions.percent.toFixed(1)}`;
+  scalePill.classList.toggle('scale-changed', Math.abs(dimensions.percent - 100) > 0.5);
+  scalePill.title = `Orijinal boyutun %${dimensions.percent.toFixed(1)}'i`;
+
+  if (scaleInput && document.activeElement !== scaleInput) {
+    scaleInput.value = dimensions.percent.toFixed(1);
+  }
+  if (unitSelect && unitSelect.value !== state.unit) unitSelect.value = state.unit;
+
+  if (dimensionReadout) {
+    const original = {
+      x: state.baseSize.x * millimetresPerUnitFor(model),
+      y: state.baseSize.y * millimetresPerUnitFor(model),
+      z: state.baseSize.z * millimetresPerUnitFor(model)
+    };
+    const volume = (dimensions.x * dimensions.y * dimensions.z) / 1000;
+    dimensionReadout.replaceChildren();
+    const rows = [
+      ['Genişlik (X)', formatLength(dimensions.x), formatLength(original.x)],
+      ['Yükseklik (Y)', formatLength(dimensions.y), formatLength(original.y)],
+      ['Derinlik (Z)', formatLength(dimensions.z), formatLength(original.z)],
+      ['Kutu hacmi', `${volume.toFixed(1)} cm³`, `${((original.x * original.y * original.z) / 1000).toFixed(1)} cm³`]
+    ];
+    for (const [label, value, base] of rows) {
+      const row = document.createElement('div');
+      row.className = 'dimension-row';
+      const key = document.createElement('span');
+      key.textContent = label;
+      const now = document.createElement('strong');
+      now.textContent = value;
+      const before = document.createElement('small');
+      before.textContent = `orijinal ${base}`;
+      row.append(key, now, before);
+      dimensionReadout.append(row);
+    }
+  }
+}
+
+function applyUserScale(targetModel, nextScale) {
+  const state = modelStates.get(targetModel);
+  if (!state) return;
+  state.userScale = THREE.MathUtils.clamp(nextScale, MIN_USER_SCALE, MAX_USER_SCALE);
+  targetModel.scale.copy(state.baseScale).multiplyScalar(state.userScale);
+  targetModel.updateMatrixWorld(true);
+  const sphere = new THREE.Box3().setFromObject(targetModel).getBoundingSphere(new THREE.Sphere());
+  if (Number.isFinite(sphere.radius) && sphere.radius > 0 && targetModel === model) {
+    modelRadius = sphere.radius;
+  }
+  if (targetModel === model) updateDimensionReadout();
+}
+
+function setModelScale(nextScale, { announce = true } = {}) {
+  if (!model) return;
+  applyUserScale(model, nextScale);
+  const dimensions = currentDimensions();
+  if (announce && dimensions) {
+    modelStatus.textContent = `Ölçek %${dimensions.percent.toFixed(1)} · ${formatLength(dimensions.x)} × ${formatLength(dimensions.y)} × ${formatLength(dimensions.z)}`;
+  }
+}
+
+function multiplyModelScale(factor, options) {
+  const state = modelStates.get(model);
+  if (!state) return;
+  setModelScale(state.userScale * factor, options);
+}
+
+/* ------------------------------------------------------------------ *
+ * Exploded view
+ * ------------------------------------------------------------------ */
+
+function prepareExplodeData(targetModel) {
+  targetModel.updateMatrixWorld(true);
+  const centre = new THREE.Box3().setFromObject(targetModel).getCenter(new THREE.Vector3());
+  const parts = [];
+  targetModel.traverse((object) => {
+    if (!object.isMesh || !object.geometry) return;
+    object.geometry.computeBoundingBox();
+    const partCentre = object.geometry.boundingBox.getCenter(new THREE.Vector3())
+      .applyMatrix4(object.matrixWorld);
+    const direction = partCentre.clone().sub(centre);
+    if (direction.lengthSq() < 1e-8) direction.set(0, 1, 0);
+    direction.normalize();
+    const parent = object.parent ?? targetModel;
+    // Express the world-space push direction in the mesh's own parent space so
+    // nested rigs explode outwards rather than along the parent's axes.
+    const localFrom = parent.worldToLocal(partCentre.clone());
+    const localTo = parent.worldToLocal(partCentre.clone().add(direction));
+    const localDirection = localTo.sub(localFrom);
+    object.userData.explodeBasePosition = object.position.clone();
+    object.userData.explodeDirection = localDirection;
+    parts.push(object);
+  });
+  // Spread is measured once, while the model is still assembled, and stored in
+  // local units so it neither drifts as parts move nor changes with user scale.
+  const worldDiagonal = new THREE.Box3().setFromObject(targetModel)
+    .getSize(new THREE.Vector3()).length();
+  const worldScale = targetModel.getWorldScale(new THREE.Vector3());
+  const largestAxis = Math.max(Math.abs(worldScale.x), Math.abs(worldScale.y), Math.abs(worldScale.z), 1e-6);
+  return { parts, spread: (worldDiagonal / largestAxis) * 0.45 };
+}
+
+function applyExplode(factor) {
+  const state = modelStates.get(model);
+  if (!state?.parts?.length) return;
+  const spread = state.explodeSpread ?? 0;
+  for (const part of state.parts) {
+    const base = part.userData.explodeBasePosition;
+    const direction = part.userData.explodeDirection;
+    if (!base || !direction) continue;
+    part.position.copy(base).addScaledVector(direction, spread * factor);
+  }
+  state.explode = factor;
+  if (explodeSlider) explodeSlider.value = String(Math.round(factor * 100));
+  if (explodeValue) explodeValue.textContent = `%${Math.round(factor * 100)}`;
+}
+
+function setExplode(factor) {
+  const state = modelStates.get(model);
+  if (!state) return;
+  if (!state.parts?.length || state.parts.length < 2) {
+    if (explodeSlider) explodeSlider.value = '0';
+    if (explodeValue) explodeValue.textContent = 'tek parça';
+    modelStatus.textContent = `${state.name} tek gövdeli bir mesh; ayrılabilecek parça yok.`;
+    return;
+  }
+  applyExplode(THREE.MathUtils.clamp(factor, 0, 1));
+}
+
+/* ------------------------------------------------------------------ *
+ * Model lifecycle
+ * ------------------------------------------------------------------ */
 
 function activateModel(nextModel) {
   if (!nextModel) return;
@@ -144,6 +370,113 @@ function activateModel(nextModel) {
   animationAction = state?.animationAction ?? null;
   const sphere = new THREE.Box3().setFromObject(model).getBoundingSphere(new THREE.Sphere());
   if (Number.isFinite(sphere.radius) && sphere.radius > 0) modelRadius = sphere.radius;
+  if (explodeSlider) explodeSlider.value = String(Math.round((state?.explode ?? 0) * 100));
+  if (explodeValue) explodeValue.textContent = `%${Math.round((state?.explode ?? 0) * 100)}`;
+  updateDimensionReadout();
+  renderModelList();
+}
+
+function describeModel(targetModel) {
+  const state = modelStates.get(targetModel);
+  const parts = state?.stats?.meshes ?? 0;
+  const triangles = state?.stats?.triangles ?? 0;
+  const percent = state?.userScale ? ` · %${(state.userScale * 100).toFixed(0)}` : '';
+  return `${parts} parça · ${triangles.toLocaleString('tr-TR')} üçgen${percent}`;
+}
+
+function renderModelList() {
+  modelCount.textContent = String(models.length);
+  modelList.replaceChildren();
+  if (models.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty-list';
+    empty.textContent = 'Eklediğin modeller burada listelenecek.';
+    modelList.append(empty);
+    return;
+  }
+
+  models.forEach((candidate) => {
+    const state = modelStates.get(candidate);
+    const row = document.createElement('div');
+    row.className = 'model-row';
+
+    const selectButton = document.createElement('button');
+    selectButton.type = 'button';
+    selectButton.className = `model-select${candidate === model ? ' active' : ''}`;
+    selectButton.setAttribute('aria-pressed', String(candidate === model));
+    selectButton.title = `${state?.name ?? 'Model'} modelini etkinleştir`;
+    const thumbnail = document.createElement('span');
+    thumbnail.className = 'model-thumbnail';
+    thumbnail.textContent = (state?.extension ?? '3d').toUpperCase();
+    const copy = document.createElement('span');
+    copy.className = 'model-copy';
+    const name = document.createElement('strong');
+    name.textContent = state?.name ?? 'İsimsiz model';
+    const details = document.createElement('small');
+    details.textContent = describeModel(candidate);
+    copy.append(name, details);
+    selectButton.append(thumbnail, copy);
+    selectButton.addEventListener('click', () => selectModel(candidate));
+
+    const removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'model-remove';
+    removeButton.textContent = '×';
+    removeButton.title = `${state?.name ?? 'Model'} modelini sahneden kaldır`;
+    removeButton.setAttribute('aria-label', `${state?.name ?? 'Model'} modelini kaldır`);
+    removeButton.addEventListener('click', () => removeModel(candidate));
+    row.append(selectButton, removeButton);
+    modelList.append(row);
+  });
+}
+
+function selectModel(nextModel) {
+  if (!models.includes(nextModel)) return;
+  if (anchored) setSpatialAnchor(false);
+  activateModel(nextModel);
+  resetGestureState();
+  setControlsEnabled(true, Boolean(animationAction));
+  fitCameraToModel();
+  const state = modelStates.get(nextModel);
+  modelStatus.textContent = `${state?.name ?? 'Model'} etkin · ${models.length} model sahnede`;
+}
+
+function removeModel(targetModel) {
+  const removalIndex = models.indexOf(targetModel);
+  if (removalIndex < 0) return;
+  const state = modelStates.get(targetModel);
+  const wasActive = targetModel === model;
+  if (wasActive && anchored) setSpatialAnchor(false);
+  if (wasActive) clearDustEffect();
+  hiddenModels.delete(targetModel);
+  if (state?.mixer) {
+    state.mixer.stopAllAction();
+    const mixerIndex = modelMixers.indexOf(state.mixer);
+    if (mixerIndex >= 0) modelMixers.splice(mixerIndex, 1);
+  }
+  disposeModel(targetModel);
+  models.splice(removalIndex, 1);
+  modelStates.delete(targetModel);
+
+  if (models.length === 0) {
+    model = null;
+    mixer = null;
+    animationAction = null;
+    baseModelQuaternion = null;
+    baseModelPosition = null;
+    modelVelocity.set(0, 0, 0);
+    document.querySelector('#viewport').classList.remove('model-active');
+    setControlsEnabled(false);
+    updateDimensionReadout();
+    modelStatus.textContent = `${state?.name ?? 'Model'} kaldırıldı. Sahne boş.`;
+  } else {
+    if (wasActive) activateModel(models[Math.min(removalIndex, models.length - 1)]);
+    setControlsEnabled(true, Boolean(animationAction));
+    resetGestureState();
+    fitCameraToModels();
+    modelStatus.textContent = `${state?.name ?? 'Model'} kaldırıldı · ${models.length} model kaldı`;
+  }
+  renderModelList();
 }
 
 function fitCameraToModels() {
@@ -204,20 +537,24 @@ function setControlsEnabled(enabled, hasAnimation = false) {
   rotationButton.disabled = !enabled;
   animationButton.disabled = !enabled || !hasAnimation;
   gestureButton.disabled = !enabled;
+  for (const element of [scaleInput, scaleDownButton, scaleUpButton, scaleResetButton, unitSelect, explodeSlider, assembleButton, gcodeButton]) {
+    if (element) element.disabled = !enabled;
+  }
+  if (gcodeButton && slicingInProgress) gcodeButton.disabled = true;
   if (!enabled) {
     gestureEnabled = false;
-    gestureButton.textContent = 'El kontrolü: kapalı';
+    gestureButton.classList.remove('is-on');
+    gestureButton.setAttribute('aria-pressed', 'false');
     gestureStatus.textContent = 'Jest kontrolü için önce model yükleyin.';
     resetGestureState();
   } else {
-    gestureStatus.textContent = 'El kontrolünü açarak jestleri etkinleştirin.';
+    gestureStatus.textContent = gestureEnabled ? 'Jest: el bekleniyor' : 'El kontrolünü açarak jestleri etkinleştirin.';
   }
 }
 
 function resetGestureState() {
   gestureMode = 'idle';
   smoothedCenters = [];
-  previousSingleCenter = null;
   previousPalmQuaternion = null;
   smoothedPalmQuaternion = null;
   previousTwoHandDistance = null;
@@ -229,6 +566,10 @@ function resetGestureState() {
   missingHandFrames = 0;
   smoothedPinchRatio = null;
 }
+
+/* ------------------------------------------------------------------ *
+ * Hand analysis
+ * ------------------------------------------------------------------ */
 
 function palmCenter(hand) {
   const palmIndices = [0, 5, 9, 13, 17];
@@ -258,6 +599,25 @@ function smoothCenter(center, index) {
 
 function distance2d(first, second) {
   return Math.hypot(second.x - first.x, second.y - first.y);
+}
+
+/**
+ * Carry the last good hands forward for a few frames. MediaPipe occasionally
+ * drops a hand that is plainly visible, and without this the gesture state
+ * machine resets mid-motion.
+ */
+function holdHands(hands) {
+  if (hands.length > 0) {
+    heldHands = hands;
+    heldHandFrames = 0;
+    return hands;
+  }
+  if (heldHands.length > 0 && heldHandFrames < HAND_HOLD_FRAMES) {
+    heldHandFrames += 1;
+    return heldHands;
+  }
+  heldHands = [];
+  return hands;
 }
 
 function pinchMeasurement(hand) {
@@ -290,15 +650,17 @@ function landmarkToNdc(landmark) {
 function pinchHitModel(center) {
   const ndc = landmarkToNdc(center);
   if (!ndc || models.length === 0) return null;
-  const toleranceX = 34 / Math.max(canvas.clientWidth, 1) * 2;
-  const toleranceY = 34 / Math.max(canvas.clientHeight, 1) * 2;
+  const toleranceX = 42 / Math.max(canvas.clientWidth, 1) * 2;
+  const toleranceY = 42 / Math.max(canvas.clientHeight, 1) * 2;
   const samples = [
     [0, 0], [toleranceX, 0], [-toleranceX, 0],
-    [0, toleranceY], [0, -toleranceY]
+    [0, toleranceY], [0, -toleranceY],
+    [toleranceX * 0.7, toleranceY * 0.7], [-toleranceX * 0.7, -toleranceY * 0.7]
   ];
+  const visible = models.filter((candidate) => candidate.visible);
   for (const [offsetX, offsetY] of samples) {
     raycaster.setFromCamera(new THREE.Vector2(ndc.x + offsetX, ndc.y + offsetY), camera);
-    const hit = raycaster.intersectObjects(models.filter((candidate) => candidate.visible), true)[0];
+    const hit = raycaster.intersectObjects(visible, true)[0];
     if (!hit) continue;
     let root = hit.object;
     while (root.parent && !models.includes(root)) root = root.parent;
@@ -322,22 +684,22 @@ function isSpockGesture(hand) {
   const landmarks = hand.landmarks;
   const wrist = landmarks[0];
   const palmSize = Math.max(distance2d(wrist, landmarks[9]), 0.0001);
-  const extended = (tip, pip) => distance2d(wrist, landmarks[tip]) > distance2d(wrist, landmarks[pip]) * 1.08;
+  const extended = (tip, pip) => distance2d(wrist, landmarks[tip]) > distance2d(wrist, landmarks[pip]) * 1.06;
   const fingersExtended = extended(8, 6) && extended(12, 10) && extended(16, 14) && extended(20, 18);
   const indexMiddleGap = distance2d(landmarks[8], landmarks[12]) / palmSize;
   const middleRingGap = distance2d(landmarks[12], landmarks[16]) / palmSize;
   const ringPinkyGap = distance2d(landmarks[16], landmarks[20]) / palmSize;
-  const groupedPairs = indexMiddleGap < 0.9 && ringPinkyGap < 0.9;
-  const splitCenter = middleRingGap > 0.42
-    && middleRingGap > indexMiddleGap * 1.18
-    && middleRingGap > ringPinkyGap * 1.18;
+  const groupedPairs = indexMiddleGap < 0.95 && ringPinkyGap < 0.95;
+  const splitCenter = middleRingGap > 0.4
+    && middleRingGap > indexMiddleGap * 1.15
+    && middleRingGap > ringPinkyGap * 1.15;
   return fingersExtended && groupedPairs && splitCenter;
 }
 
 function isOpenPalm(hand) {
   const landmarks = hand.landmarks;
   const wrist = landmarks[0];
-  const extended = (tip, pip) => distance2d(wrist, landmarks[tip]) > distance2d(wrist, landmarks[pip]) * 1.12;
+  const extended = (tip, pip) => distance2d(wrist, landmarks[tip]) > distance2d(wrist, landmarks[pip]) * 1.1;
   return [extended(8, 6), extended(12, 10), extended(16, 14), extended(20, 18)]
     .filter(Boolean).length >= 3;
 }
@@ -369,6 +731,10 @@ function isFistGesture(hand) {
     < distance2d(landmarks[2], landmarks[9]) * 1.15;
   return curled >= 4 && thumbFolded;
 }
+
+/* ------------------------------------------------------------------ *
+ * Dust / restore effects
+ * ------------------------------------------------------------------ */
 
 function clearDustEffect() {
   if (!dustEffect) return;
@@ -482,37 +848,50 @@ function updateFistSequence(hands) {
   return true;
 }
 
-function setPresentationLock(locked) {
-  presentationLocked = locked;
+/* ------------------------------------------------------------------ *
+ * Spatial anchor (Spock)
+ * ------------------------------------------------------------------ */
+
+function modelDepthMetres() {
+  if (!model || !anchored) return null;
+  const centre = new THREE.Box3().setFromObject(model).getCenter(new THREE.Vector3());
+  return camera.position.distanceTo(centre) * metresPerSceneUnit;
+}
+
+function setSpatialAnchor(active) {
+  anchored = active;
+  sharedState.anchored = active;
   resetGestureState();
-  if (locked) {
-    lockRestoreState = {
-      autoRotate: autoRotateEnabled,
-      animationRunning: Boolean(animationAction?.isRunning() && !animationAction.paused)
+
+  if (active && model) {
+    model.updateMatrixWorld(true);
+    const centre = new THREE.Box3().setFromObject(model).getCenter(new THREE.Vector3());
+    const sceneDistance = Math.max(camera.position.distanceTo(centre), 1e-4);
+    // Park the model just in front of where the user is standing so stepping
+    // forward genuinely puts them between the camera and the model.
+    anchorDepthMeters = Number.isFinite(smoothedPersonDistanceMeters)
+      ? THREE.MathUtils.clamp(smoothedPersonDistanceMeters - 0.25, 0.3, 6)
+      : 1.2;
+    metresPerSceneUnit = anchorDepthMeters / sceneDistance;
+    anchorCenter.copy(model.position);
+    anchorOrbitRadius = modelRadius * 1.35;
+    orbitPhase = 0;
+    anchorRestoreState = {
+      position: model.position.clone(),
+      quaternion: model.quaternion.clone()
     };
-    autoRotateEnabled = false;
-    if (animationAction) animationAction.paused = true;
     modelVelocity.set(0, 0, 0);
-    lockedModelDistanceMeters = null;
-    lockedPersonDistanceMeters = null;
-    controls.enabled = false;
-    resetButton.disabled = true;
-    wireframeButton.disabled = true;
-    rotationButton.disabled = true;
-    animationButton.disabled = true;
-    gestureButton.disabled = true;
-    gestureStatus.textContent = 'Spock kilidi: model ve kontroller sabitlendi';
+    gestureStatus.textContent = `Uzamsal kilit açık · model ${Math.round(anchorDepthMeters * 100)} cm ötede`;
+    if (depthPill) depthPill.hidden = false;
   } else {
-    controls.enabled = true;
-    resetButton.disabled = false;
-    wireframeButton.disabled = false;
-    rotationButton.disabled = false;
-    animationButton.disabled = !animationAction;
-    gestureButton.disabled = false;
-    autoRotateEnabled = Boolean(lockRestoreState?.autoRotate);
-    if (animationAction && lockRestoreState?.animationRunning) animationAction.paused = false;
-    gestureStatus.textContent = gestureEnabled ? 'Spock kilidi açıldı; jestler etkin.' : 'Spock kilidi açıldı.';
-    lockRestoreState = null;
+    if (anchorRestoreState && model) {
+      model.position.copy(anchorRestoreState.position);
+      model.quaternion.copy(anchorRestoreState.quaternion);
+    }
+    anchorRestoreState = null;
+    sharedState.modelDepthMeters = null;
+    if (depthPill) depthPill.hidden = true;
+    gestureStatus.textContent = gestureEnabled ? 'Uzamsal kilit kapandı; jestler etkin.' : 'Uzamsal kilit kapandı.';
   }
 }
 
@@ -527,8 +906,8 @@ function updateSpockLock(hands) {
       spockEvidence = 0;
     }
     if (spockEvidence === 0 && gestureMode === 'idle') {
-      gestureStatus.textContent = presentationLocked
-        ? 'Sunum kilidi açık: model sabit, el kontrolleri kapalı.'
+      gestureStatus.textContent = anchored
+        ? `Uzamsal kilit açık · model ${Math.round(anchorDepthMeters * 100)} cm ötede`
         : (gestureEnabled ? 'Jest: el bekleniyor' : 'Jest kontrolü kapalı.');
     }
     return false;
@@ -537,9 +916,9 @@ function updateSpockLock(hands) {
   if (!spockLatched) spockEvidence = Math.min(SPOCK_REQUIRED_EVIDENCE, spockEvidence + 1);
   if (!spockLatched && spockEvidence >= SPOCK_REQUIRED_EVIDENCE && model) {
     spockLatched = true;
-    setPresentationLock(!presentationLocked);
+    setSpatialAnchor(!anchored);
   } else if (!spockLatched) {
-    gestureStatus.textContent = `Kilitleme hareketini sabit tutun… ${Math.round(spockEvidence / SPOCK_REQUIRED_EVIDENCE * 100)}%`;
+    gestureStatus.textContent = `Uzamsal kilit… ${Math.round(spockEvidence / SPOCK_REQUIRED_EVIDENCE * 100)}%`;
   }
   return true;
 }
@@ -553,8 +932,13 @@ function dragModelTo(center) {
   }
 }
 
-function applyGestureFrame(hands) {
+/* ------------------------------------------------------------------ *
+ * Gesture frame
+ * ------------------------------------------------------------------ */
+
+function applyGestureFrame(rawHands) {
   if (!gestureEnabled || !model) return;
+  const hands = holdHands(rawHands);
 
   if (hands.length === 0) {
     missingHandFrames += 1;
@@ -567,7 +951,7 @@ function applyGestureFrame(hands) {
     const pinch = pinchMeasurement(hands[0]);
     smoothedPinchRatio = smoothedPinchRatio === null
       ? pinch.ratio
-      : THREE.MathUtils.lerp(smoothedPinchRatio, pinch.ratio, 0.42);
+      : THREE.MathUtils.lerp(smoothedPinchRatio, pinch.ratio, 0.45);
     const fingersPinching = pinchActive
       ? smoothedPinchRatio < PINCH_RELEASE_RATIO
       : smoothedPinchRatio < PINCH_START_RATIO;
@@ -665,7 +1049,9 @@ function applyGestureFrame(hands) {
       gestureMode = 'zoom';
       smoothedCenters = [first, second];
       previousTwoHandDistance = distance;
-      gestureStatus.textContent = 'Jest: iki elle yakınlaştırma';
+      gestureStatus.textContent = twoHandMode === 'scale'
+        ? 'Jest: iki elle model boyutu'
+        : 'Jest: iki elle kamera yakınlaştırma';
       return;
     }
 
@@ -674,17 +1060,26 @@ function applyGestureFrame(hands) {
       previousTwoHandDistance = distance;
       if (Math.abs(logDelta) < ZOOM_DEAD_ZONE) logDelta = 0;
       logDelta = THREE.MathUtils.clamp(logDelta, -MAX_ZOOM_LOG_DELTA, MAX_ZOOM_LOG_DELTA);
+      if (logDelta === 0) return;
 
-      const offset = camera.position.clone().sub(controls.target);
-      const currentDistance = offset.length();
-      const nextDistance = THREE.MathUtils.clamp(
-        currentDistance * Math.exp(-logDelta * 2.2),
-        controls.minDistance,
-        controls.maxDistance
-      );
-      if (currentDistance > 0) {
-        camera.position.copy(controls.target).add(offset.multiplyScalar(nextDistance / currentDistance));
-        controls.update();
+      if (twoHandMode === 'scale') {
+        multiplyModelScale(Math.exp(logDelta * 1.8), { announce: false });
+        const dimensions = currentDimensions();
+        if (dimensions) {
+          gestureStatus.textContent = `Boyut %${dimensions.percent.toFixed(0)} · ${formatLength(dimensions.x)} × ${formatLength(dimensions.y)} × ${formatLength(dimensions.z)}`;
+        }
+      } else {
+        const offset = camera.position.clone().sub(controls.target);
+        const currentDistance = offset.length();
+        const nextDistance = THREE.MathUtils.clamp(
+          currentDistance * Math.exp(-logDelta * 2.2),
+          controls.minDistance,
+          controls.maxDistance
+        );
+        if (currentDistance > 0) {
+          camera.position.copy(controls.target).add(offset.multiplyScalar(nextDistance / currentDistance));
+          controls.update();
+        }
       }
     }
     return;
@@ -695,6 +1090,10 @@ function applyGestureFrame(hands) {
     gestureStatus.textContent = 'Jest: el bekleniyor';
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Loading
+ * ------------------------------------------------------------------ */
 
 function modelStats(root) {
   let meshes = 0;
@@ -758,10 +1157,28 @@ async function loadModelFile(file) {
 
     placeModelBesideExisting(loadedModel);
     scene.add(loadedModel);
+    document.querySelector('#viewport').classList.add('model-active');
     models.push(loadedModel);
+    const stats = modelStats(loadedModel);
+
+    loadedModel.updateMatrixWorld(true);
+    const baseSize = new THREE.Box3().setFromObject(loadedModel).getSize(new THREE.Vector3());
     modelStates.set(loadedModel, {
+      name: file.name,
+      extension,
+      stats,
       quaternion: loadedModel.quaternion.clone(),
-      position: loadedModel.position.clone()
+      position: loadedModel.position.clone(),
+      baseScale: loadedModel.scale.clone(),
+      baseSize,
+      // glTF is metres by convention; STL and OBJ come out of CAD in millimetres.
+      unit: extension === 'glb' ? 'm' : 'mm',
+      userScale: 1,
+      explode: 0,
+      ...(() => {
+        const { parts, spread } = prepareExplodeData(loadedModel);
+        return { parts, explodeSpread: spread };
+      })()
     });
     activateModel(loadedModel);
     fitCameraToModels();
@@ -777,11 +1194,10 @@ async function loadModelFile(file) {
       animationAction = null;
     }
 
-    const stats = modelStats(model);
-    const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
-    const dimensions = [size.x, size.y, size.z].map((value) => Number(value.toPrecision(4))).join(' × ');
-    modelStatus.textContent = `${file.name} · ${stats.meshes} parça · ${stats.triangles.toLocaleString('tr-TR')} üçgen · ${dimensions} birim`;
+    const dimensions = currentDimensions();
+    modelStatus.textContent = `${file.name} · ${stats.meshes} parça · ${stats.triangles.toLocaleString('tr-TR')} üçgen · ${formatLength(dimensions.x)} × ${formatLength(dimensions.y)} × ${formatLength(dimensions.z)}`;
     setControlsEnabled(true, Boolean(animationAction));
+    renderModelList();
   } catch (error) {
     if (models.length > 0) setControlsEnabled(true, Boolean(animationAction));
     modelStatus.textContent = `Model yüklenemedi: ${error.message}`;
@@ -791,12 +1207,58 @@ async function loadModelFile(file) {
   }
 }
 
+/* ------------------------------------------------------------------ *
+ * Render loop
+ * ------------------------------------------------------------------ */
+
+let lastCanvasWidth = 0;
+let lastCanvasHeight = 0;
+let lastPixelRatio = 0;
+
 function resize() {
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
-  if (canvas.width !== width || canvas.height !== height) renderer.setSize(width, height, false);
+  const pixelRatio = Math.min(window.devicePixelRatio, 2);
+  if (!width || !height) return;
+  // Compare against the CSS size we last applied. Comparing canvas.width (device
+  // pixels) to clientWidth (CSS pixels) made this call setSize on every single
+  // frame at any devicePixelRatio above 1, which is what caused the stutter.
+  if (width === lastCanvasWidth && height === lastCanvasHeight && pixelRatio === lastPixelRatio) return;
+  lastCanvasWidth = width;
+  lastCanvasHeight = height;
+  lastPixelRatio = pixelRatio;
+  renderer.setPixelRatio(pixelRatio);
+  renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+}
+
+function updateAnchorOrbit(delta) {
+  if (!anchored || !model) {
+    if (!anchored) sharedState.modelDepthMeters = null;
+    return;
+  }
+
+  if (autoRotateEnabled) {
+    orbitPhase += delta * ORBIT_ANGULAR_SPEED;
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+    model.position.copy(anchorCenter)
+      .addScaledVector(right, Math.sin(orbitPhase) * anchorOrbitRadius)
+      .addScaledVector(forward, Math.cos(orbitPhase) * anchorOrbitRadius);
+    model.rotateOnWorldAxis(camera.up, delta * 0.7);
+  }
+
+  const depth = modelDepthMetres();
+  sharedState.modelDepthMeters = depth;
+  if (depthPill && Number.isFinite(depth)) {
+    const person = Number.isFinite(smoothedPersonDistanceMeters)
+      ? ` · siz ${Math.round(smoothedPersonDistanceMeters * 100)} cm`
+      : '';
+    depthPill.textContent = `Model ${Math.round(depth * 100)} cm${person}`;
+    depthPill.classList.toggle('behind', Number.isFinite(smoothedPersonDistanceMeters)
+      && depth > smoothedPersonDistanceMeters + DEPTH_HYSTERESIS_METRES);
+  }
 }
 
 function render() {
@@ -815,38 +1277,393 @@ function render() {
     dustEffect.points.material.opacity = Math.max(0, 1 - dustEffect.elapsed / 1.8);
     if (dustEffect.elapsed >= 1.8) clearDustEffect();
   }
-  if (model && modelVelocity.lengthSq() > 0.000001) {
+  if (model && !anchored && modelVelocity.lengthSq() > 0.000001) {
     model.position.addScaledVector(modelVelocity, delta);
     modelVelocity.multiplyScalar(Math.exp(-1.8 * delta));
     if (modelVelocity.length() < modelRadius * 0.015) modelVelocity.set(0, 0, 0);
   }
-  controls.autoRotate = autoRotateEnabled;
+  updateAnchorOrbit(delta);
+  // While anchored, auto-rotate drives the model's orbit instead of the camera.
+  controls.autoRotate = autoRotateEnabled && !anchored;
   controls.update(delta);
   renderer.render(scene, camera);
   requestAnimationFrame(render);
 }
 
+/* ------------------------------------------------------------------ *
+ * G-code export
+ * ------------------------------------------------------------------ */
+
+function readPrintSettings() {
+  const number = (element, fallback) => {
+    const value = Number.parseFloat(element?.value ?? '');
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  };
+  const nozzle = number(gcodeNozzle, DEFAULT_PRINT_SETTINGS.nozzleDiameter);
+  const layerHeight = number(gcodeLayerHeight, DEFAULT_PRINT_SETTINGS.layerHeight);
+  return {
+    ...DEFAULT_PRINT_SETTINGS,
+    nozzleDiameter: nozzle,
+    extrusionWidth: nozzle * 1.05,
+    layerHeight,
+    firstLayerHeight: Math.min(nozzle * 0.75, layerHeight * 1.4),
+    filamentDiameter: number(gcodeFilament, DEFAULT_PRINT_SETTINGS.filamentDiameter),
+    nozzleTemperature: Math.round(number(gcodeNozzleTemp, DEFAULT_PRINT_SETTINGS.nozzleTemperature)),
+    bedTemperature: Math.round(number(gcodeBedTemp, DEFAULT_PRINT_SETTINGS.bedTemperature)),
+    printSpeed: number(gcodeSpeed, DEFAULT_PRINT_SETTINGS.printSpeed),
+    firstLayerSpeed: Math.max(10, number(gcodeSpeed, DEFAULT_PRINT_SETTINGS.printSpeed) * 0.5),
+    bedWidth: number(gcodeBedWidth, DEFAULT_PRINT_SETTINGS.bedWidth),
+    bedDepth: number(gcodeBedDepth, DEFAULT_PRINT_SETTINGS.bedDepth),
+    bedHeight: number(gcodeBedHeight, DEFAULT_PRINT_SETTINGS.bedHeight)
+  };
+}
+
+async function exportGcode() {
+  const state = modelStates.get(model);
+  if (!model || !state) {
+    gcodeStatus.textContent = 'Önce bir model seçin.';
+    return;
+  }
+  if (slicingInProgress) return;
+
+  slicingInProgress = true;
+  gcodeButton.disabled = true;
+  gcodeStatus.textContent = 'Dilimleniyor… %0';
+
+  // The exploded offsets would be baked into the print, so slice the assembled
+  // shape and put the explode factor back afterwards.
+  const explodeBefore = state.explode ?? 0;
+  if (explodeBefore > 0) applyExplode(0);
+
+  let lastYield = performance.now();
+  try {
+    const settings = readPrintSettings();
+    const result = await sliceToGcode({
+      objects: [model],
+      millimetresPerUnit: millimetresPerUnitFor(model),
+      settings,
+      metadata: { name: state.name, scalePercent: state.userScale * 100 },
+      onStage: (label) => { gcodeStatus.textContent = `Hazırlanıyor (${label})…`; },
+      onProgress: async (ratio) => {
+        const now = performance.now();
+        if (now - lastYield < 60) return;
+        lastYield = now;
+        gcodeStatus.textContent = `Dilimleniyor… %${Math.round(ratio * 100)}`;
+        // Yield to the compositor so the viewport keeps drawing during a slice.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    });
+
+    const baseName = state.name.replace(/\.[^.]+$/, '');
+    const fileName = `${baseName}-%${Math.round(state.userScale * 100)}.gcode`;
+    const saved = await window.desktopApi.saveGcode(result.text, fileName);
+    const { width, depth, height } = result.dimensions;
+    const fitWarning = result.bedFits ? '' : ' ⚠ Model tablaya sığmıyor.';
+    gcodeStatus.textContent = `${result.layers} katman · ${width.toFixed(1)} × ${depth.toFixed(1)} × ${height.toFixed(1)} mm · ${(result.filamentMillimetres / 1000).toFixed(2)} m filament${fitWarning}\nKaydedildi: ${saved.path}`;
+  } catch (error) {
+    gcodeStatus.textContent = `G-code üretilemedi: ${error.message}`;
+  } finally {
+    if (explodeBefore > 0) applyExplode(explodeBefore);
+    slicingInProgress = false;
+    gcodeButton.disabled = !model;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Assistant
+ * ------------------------------------------------------------------ */
+
+function eachMaterial(callback, partName = null) {
+  if (!model) return 0;
+  let touched = 0;
+  model.traverse((object) => {
+    if (!object.isMesh) return;
+    if (partName && !object.name.toLocaleLowerCase('tr').includes(partName.toLocaleLowerCase('tr'))) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    materials.filter(Boolean).forEach((material) => {
+      callback(material, object);
+      material.needsUpdate = true;
+      touched += 1;
+    });
+  });
+  return touched;
+}
+
+const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/**
+ * Coerce one action into a shape runAction can trust. Actions can arrive from
+ * the Claude bridge, so nothing here may assume well-formed numbers or enums.
+ */
+function sanitizeAction(raw) {
+  if (!raw || typeof raw.type !== 'string') return null;
+  const clampedNumber = (value, min, max, fallback = null) => {
+    const parsed = typeof value === 'number' ? value : Number.parseFloat(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return THREE.MathUtils.clamp(parsed, min, max);
+  };
+  const axis = ['x', 'y', 'z'].includes(raw.axis) ? raw.axis : 'y';
+
+  switch (raw.type) {
+    case 'color':
+      return HEX_COLOR.test(String(raw.value ?? ''))
+        ? { type: 'color', value: String(raw.value), part: raw.part ? String(raw.part) : null }
+        : null;
+    case 'scalePercent': {
+      const value = clampedNumber(raw.value, MIN_USER_SCALE * 100, MAX_USER_SCALE * 100);
+      return value === null ? null : { type: 'scalePercent', value };
+    }
+    case 'scaleMultiply': {
+      const value = clampedNumber(raw.value, 0.05, 20);
+      return value === null || value <= 0 ? null : { type: 'scaleMultiply', value };
+    }
+    case 'position': {
+      const value = clampedNumber(raw.value, -1e4, 1e4);
+      return value === null ? null : { type: 'position', axis, value, relative: raw.relative !== false };
+    }
+    case 'rotate': {
+      const degrees = clampedNumber(raw.degrees, -3600, 3600);
+      return degrees === null ? null : { type: 'rotate', axis, degrees };
+    }
+    case 'explode':
+      return { type: 'explode', value: clampedNumber(raw.value, 0, 1, 1) };
+    case 'opacity':
+      return { type: 'opacity', value: clampedNumber(raw.value, 0, 1, 0.5) };
+    case 'metallic':
+      return { type: 'metallic', value: clampedNumber(raw.value, 0, 1, 0.9) };
+    case 'roughness':
+      return { type: 'roughness', value: clampedNumber(raw.value, 0, 1, 0.5) };
+    case 'wireframe':
+    case 'autoRotate':
+      return { type: raw.type, value: Boolean(raw.value) };
+    case 'assemble':
+    case 'reset':
+    case 'fit':
+      return { type: raw.type };
+    default:
+      return null;
+  }
+}
+
+function runAction(action) {
+  if (!model) return 'Sahnede model yok.';
+  switch (action.type) {
+    case 'color': {
+      const color = new THREE.Color(action.value);
+      const touched = eachMaterial((material) => { material.color?.copy(color); }, action.part);
+      if (touched === 0) return `"${action.part}" adlı parça bulunamadı.`;
+      break;
+    }
+    case 'scalePercent':
+      setModelScale(action.value / 100, { announce: false });
+      break;
+    case 'scaleMultiply':
+      multiplyModelScale(action.value, { announce: false });
+      break;
+    case 'position': {
+      const delta = new THREE.Vector3(
+        action.axis === 'x' ? action.value : 0,
+        action.axis === 'y' ? action.value : 0,
+        action.axis === 'z' ? -action.value : 0
+      );
+      if (action.relative) model.position.add(delta);
+      else model.position[action.axis] = action.axis === 'z' ? -action.value : action.value;
+      if (anchored) anchorCenter.copy(model.position);
+      break;
+    }
+    case 'rotate': {
+      const axis = new THREE.Vector3(
+        action.axis === 'x' ? 1 : 0,
+        action.axis === 'y' ? 1 : 0,
+        action.axis === 'z' ? 1 : 0
+      );
+      model.rotateOnWorldAxis(axis, THREE.MathUtils.degToRad(action.degrees));
+      break;
+    }
+    case 'explode':
+      setExplode(action.value);
+      break;
+    case 'assemble':
+      setExplode(0);
+      break;
+    case 'wireframe':
+      wireframeEnabled = action.value;
+      eachMaterial((material) => { material.wireframe = wireframeEnabled; });
+      wireframeButton.textContent = `Tel kafes: ${wireframeEnabled ? 'açık' : 'kapalı'}`;
+      break;
+    case 'opacity':
+      eachMaterial((material) => {
+        material.transparent = action.value < 1;
+        material.opacity = action.value;
+        material.depthWrite = action.value >= 1;
+      });
+      break;
+    case 'metallic':
+      eachMaterial((material) => {
+        if (material.metalness !== undefined) material.metalness = action.value;
+      });
+      break;
+    case 'roughness':
+      eachMaterial((material) => {
+        if (material.roughness !== undefined) material.roughness = action.value;
+      });
+      break;
+    case 'autoRotate':
+      autoRotateEnabled = action.value;
+      rotationButton.textContent = `Otomatik döndür: ${autoRotateEnabled ? 'açık' : 'kapalı'}`;
+      break;
+    case 'reset':
+      if (baseModelQuaternion) model.quaternion.copy(baseModelQuaternion);
+      if (baseModelPosition) model.position.copy(baseModelPosition);
+      setModelScale(1, { announce: false });
+      setExplode(0);
+      fitCameraToModels();
+      break;
+    case 'fit':
+      fitCameraToModel();
+      break;
+    default:
+      return `Bilinmeyen eylem: ${action.type}`;
+  }
+  return null;
+}
+
+function appendAiMessage(role, text) {
+  const bubble = document.createElement('div');
+  bubble.className = `ai-message ai-${role}`;
+  for (const line of String(text).split('\n')) {
+    const paragraph = document.createElement('p');
+    paragraph.textContent = line;
+    bubble.append(paragraph);
+  }
+  aiLog.append(bubble);
+  aiLog.scrollTop = aiLog.scrollHeight;
+}
+
+function sceneSummary() {
+  const state = modelStates.get(model);
+  if (!state) return 'Sahnede model yok.';
+  const dimensions = currentDimensions();
+  const partNames = (state.parts ?? []).map((part) => part.name).filter(Boolean).slice(0, 25);
+  return [
+    `Etkin model: ${state.name} (${state.extension})`,
+    `Parça sayısı: ${state.stats.meshes}, üçgen: ${state.stats.triangles}`,
+    `Ölçek: %${(state.userScale * 100).toFixed(1)}`,
+    `Boyut: ${dimensions.x.toFixed(2)} x ${dimensions.y.toFixed(2)} x ${dimensions.z.toFixed(2)} mm`,
+    `Patlatma: %${Math.round((state.explode ?? 0) * 100)}`,
+    partNames.length ? `Parça adları: ${partNames.join(', ')}` : 'Parça adları yok.'
+  ].join('\n');
+}
+
+async function askAssistantBridge(prompt) {
+  const response = await fetch('http://127.0.0.1:8765/ai/command', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt, scene: sceneSummary() })
+  });
+  if (!response.ok) throw new Error(`bridge-${response.status}`);
+  const payload = await response.json();
+  if (!payload.available) throw new Error(payload.message ?? 'bridge-unavailable');
+  return payload;
+}
+
+async function submitAssistantPrompt(rawPrompt) {
+  const prompt = rawPrompt.trim();
+  if (!prompt) return;
+  appendAiMessage('user', prompt);
+  aiInput.value = '';
+  aiSend.disabled = true;
+  aiStatus.textContent = assistantAvailable ? 'Claude düşünüyor…' : 'Komut çözümleniyor…';
+
+  let result = null;
+  let source = 'yerel';
+  if (assistantAvailable) {
+    try {
+      result = await askAssistantBridge(prompt);
+      source = 'Claude';
+    } catch {
+      assistantAvailable = false;
+      aiStatus.textContent = 'Claude köprüsüne ulaşılamadı; yerel yorumlayıcıya geçildi.';
+    }
+  }
+  if (!result) {
+    result = interpretLocally(prompt, { radius: modelRadius });
+  }
+
+  const actions = Array.isArray(result.actions) ? result.actions : [];
+  if (actions.length === 0) {
+    appendAiMessage('assistant', result.reply ?? 'Bu komutu uygulayamadım.');
+  } else if (!model) {
+    appendAiMessage('assistant', 'Önce bir 3B model yükle, sonra tekrar dene.');
+  } else {
+    const notes = [];
+    let rejected = 0;
+    for (const raw of actions) {
+      const action = sanitizeAction(raw);
+      if (!action) {
+        rejected += 1;
+        continue;
+      }
+      const problem = runAction(action);
+      notes.push(problem ?? describeAction(action));
+    }
+    if (rejected > 0) notes.push(`${rejected} eylem anlaşılamadığı için atlandı.`);
+    renderModelList();
+    updateDimensionReadout();
+    appendAiMessage(
+      'assistant',
+      [result.reply, ...notes].filter(Boolean).join('\n')
+        || 'Bu komuttan uygulanabilir bir değişiklik çıkaramadım.'
+    );
+  }
+
+  aiStatus.textContent = `Kaynak: ${source}`;
+  aiSend.disabled = false;
+  aiInput.focus();
+}
+
+async function probeAssistantBridge() {
+  try {
+    const response = await fetch('http://127.0.0.1:8765/ai/status');
+    const payload = await response.json();
+    assistantAvailable = Boolean(payload.configured);
+    aiStatus.textContent = assistantAvailable
+      ? `Claude köprüsü hazır (${payload.model}).`
+      : 'Yerel komut yorumlayıcısı etkin. Claude için ANTHROPIC_API_KEY tanımlayın.';
+  } catch {
+    assistantAvailable = false;
+    aiStatus.textContent = 'Yerel komut yorumlayıcısı etkin (backend köprüsü kapalı).';
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * UI wiring
+ * ------------------------------------------------------------------ */
+
 resetButton.addEventListener('click', () => {
   if (model && baseModelQuaternion) model.quaternion.copy(baseModelQuaternion);
   if (model && baseModelPosition) model.position.copy(baseModelPosition);
   modelVelocity.set(0, 0, 0);
+  if (anchored) setSpatialAnchor(false);
+  setModelScale(1, { announce: false });
+  setExplode(0);
   resetGestureState();
   if (gestureEnabled) gestureStatus.textContent = 'Jest: el bekleniyor';
   fitCameraToModels();
 });
+
 wireframeButton.addEventListener('click', () => {
   wireframeEnabled = !wireframeEnabled;
-  model?.traverse((object) => {
-    if (!object.isMesh) return;
-    const materials = Array.isArray(object.material) ? object.material : [object.material];
-    materials.forEach((material) => { material.wireframe = wireframeEnabled; });
-  });
+  eachMaterial((material) => { material.wireframe = wireframeEnabled; });
   wireframeButton.textContent = `Tel kafes: ${wireframeEnabled ? 'açık' : 'kapalı'}`;
 });
 
 rotationButton.addEventListener('click', () => {
   autoRotateEnabled = !autoRotateEnabled;
   rotationButton.textContent = `Otomatik döndür: ${autoRotateEnabled ? 'açık' : 'kapalı'}`;
+  if (anchored && autoRotateEnabled) {
+    gestureStatus.textContent = 'Model yörüngeye girdi; arkanızdan geçebilir.';
+  }
 });
 
 animationButton.addEventListener('click', () => {
@@ -864,59 +1681,81 @@ animationButton.addEventListener('click', () => {
 gestureButton.addEventListener('click', () => {
   gestureEnabled = !gestureEnabled;
   resetGestureState();
-  gestureButton.textContent = `El kontrolü: ${gestureEnabled ? 'açık' : 'kapalı'}`;
+  gestureButton.classList.toggle('is-on', gestureEnabled);
+  gestureButton.setAttribute('aria-pressed', String(gestureEnabled));
   gestureStatus.textContent = gestureEnabled ? 'Jest: el bekleniyor' : 'Jest kontrolü kapalı.';
 });
 
+unitSelect?.addEventListener('change', () => {
+  const state = modelStates.get(model);
+  if (!state) return;
+  state.unit = unitSelect.value;
+  updateDimensionReadout();
+  renderModelList();
+});
+
+scaleInput?.addEventListener('change', () => {
+  const percent = Number.parseFloat(scaleInput.value.replace(',', '.'));
+  if (Number.isFinite(percent) && percent > 0) setModelScale(percent / 100);
+  else updateDimensionReadout();
+});
+
+scaleUpButton?.addEventListener('click', () => multiplyModelScale(1.1));
+scaleDownButton?.addEventListener('click', () => multiplyModelScale(1 / 1.1));
+scaleResetButton?.addEventListener('click', () => setModelScale(1));
+
+twoHandModeButton?.addEventListener('click', () => {
+  twoHandMode = twoHandMode === 'scale' ? 'zoom' : 'scale';
+  twoHandModeButton.textContent = twoHandMode === 'scale'
+    ? 'İki el: model boyutu'
+    : 'İki el: kamera zoom';
+  twoHandModeButton.classList.toggle('is-on', twoHandMode === 'scale');
+});
+
+explodeSlider?.addEventListener('input', () => {
+  setExplode(Number.parseInt(explodeSlider.value, 10) / 100);
+});
+assembleButton?.addEventListener('click', () => setExplode(0));
+gcodeButton?.addEventListener('click', () => { void exportGcode(); });
+
+aiSend?.addEventListener('click', () => { void submitAssistantPrompt(aiInput.value); });
+aiInput?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    void submitAssistantPrompt(aiInput.value);
+  }
+});
+aiChips.forEach((chip) => {
+  chip.addEventListener('click', () => { void submitAssistantPrompt(chip.dataset.prompt ?? chip.textContent); });
+});
+
+/* ------------------------------------------------------------------ *
+ * Landmark stream
+ * ------------------------------------------------------------------ */
+
 window.addEventListener('hand-landmarks', (event) => {
-  const clapRestoreActive = gestureEnabled && updateClapRestore(event.detail.hands);
-  const fistSequenceActive = gestureEnabled && updateFistSequence(event.detail.hands);
-  const spockCandidate = updateSpockLock(event.detail.hands);
+  const hands = event.detail.hands ?? [];
+  const clapRestoreActive = gestureEnabled && updateClapRestore(hands);
+  const fistSequenceActive = gestureEnabled && updateFistSequence(hands);
+  const spockCandidate = updateSpockLock(hands);
+
   if (Number.isFinite(event.detail.personDistanceMeters)) {
     smoothedPersonDistanceMeters = smoothedPersonDistanceMeters === null
       ? event.detail.personDistanceMeters
       : THREE.MathUtils.lerp(smoothedPersonDistanceMeters, event.detail.personDistanceMeters, 0.22);
+    sharedState.personDepthMeters = smoothedPersonDistanceMeters;
   }
-  if (presentationLocked && lockedModelDistanceMeters === null
-      && Number.isFinite(smoothedPersonDistanceMeters)) {
-    lockedPersonDistanceMeters = smoothedPersonDistanceMeters;
-    lockedModelDistanceMeters = Math.max(0.12, smoothedPersonDistanceMeters - 0.3);
-  }
-  if (!presentationLocked) {
-    personIsInFront = false;
-  } else if (Number.isFinite(lockedModelDistanceMeters)
-      && Number.isFinite(smoothedPersonDistanceMeters)) {
-    const adaptiveThreshold = lockedPersonDistanceMeters * 0.86;
-    const enterThreshold = Math.max(lockedModelDistanceMeters + 0.05, adaptiveThreshold);
-    const leaveThreshold = enterThreshold + 0.09;
-    personIsInFront = personIsInFront
-      ? smoothedPersonDistanceMeters < leaveThreshold
-      : smoothedPersonDistanceMeters < enterThreshold;
-  }
-  const personInFront = presentationLocked
-    && Number.isFinite(lockedModelDistanceMeters)
-    && personIsInFront;
-  const pose = event.detail.pose ?? [];
-  const shoulderDepth = pose.length > 12 ? (pose[11].z + pose[12].z) / 2 : null;
-  const visibleWrists = [pose[15], pose[16]].filter((point) => point?.visibility > 0.45);
-  const handInFront = presentationLocked && Number.isFinite(shoulderDepth)
-    && visibleWrists.some((wrist) => wrist.z < shoulderDepth - 0.1);
-  window.dispatchEvent(new CustomEvent('person-occlusion', {
-    detail: {
-      ...event.detail,
-      personInFront,
-      personDistanceMeters: smoothedPersonDistanceMeters,
-      modelDistanceMeters: lockedModelDistanceMeters,
-      handInFront
-    }
-  }));
-  if (clapRestoreActive || fistSequenceActive || spockCandidate || presentationLocked || !model?.visible) return;
-  applyGestureFrame(event.detail.hands);
+
+  if (clapRestoreActive || fistSequenceActive || spockCandidate || anchored || !model?.visible) return;
+  applyGestureFrame(hands);
 });
 
 setControlsEnabled(false);
+renderModelList();
+updateDimensionReadout();
 modelStatus.textContent = '3B yükleyici hazır. GLB, STL veya OBJ dosyası seçin.';
 window.addEventListener('model-file-selected', (event) => {
   void loadModelFile(event.detail.file);
 });
+void probeAssistantBridge();
 render();
