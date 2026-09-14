@@ -2,7 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const allowedInvokeChannels = new Set(['app:get-runtime-info', 'recording:get-source-id', 'recording:save']);
+const allowedInvokeChannels = new Set(['app:get-runtime-info', 'recording:get-source-id', 'recording:save', 'gcode:save']);
 
 contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
   getRuntimeInfo: () => {
@@ -25,5 +25,12 @@ contextBridge.exposeInMainWorld('desktopApi', Object.freeze({
       return Promise.reject(new Error('Invalid recording save request'));
     }
     return ipcRenderer.invoke(channel, arrayBuffer);
+  },
+  saveGcode: (text, suggestedName) => {
+    const channel = 'gcode:save';
+    if (!allowedInvokeChannels.has(channel) || typeof text !== 'string' || text.length === 0) {
+      return Promise.reject(new Error('Invalid G-code save request'));
+    }
+    return ipcRenderer.invoke(channel, text, String(suggestedName ?? 'model.gcode'));
   }
 }));

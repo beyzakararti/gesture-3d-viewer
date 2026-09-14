@@ -13,7 +13,7 @@ const CSP = [
   "style-src 'self'",
   "img-src 'self' data: blob:",
   "media-src 'self' blob:",
-  "connect-src 'self' blob: ws://127.0.0.1:8765",
+  "connect-src 'self' blob: ws://127.0.0.1:8765 http://127.0.0.1:8765",
   "object-src 'none'",
   "base-uri 'none'",
   "frame-ancestors 'none'"
@@ -155,6 +155,31 @@ app.whenReady().then(async () => {
     if (!isTrustedAppUrl(senderUrl)) throw new Error('Untrusted recording source request');
     if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Application window is unavailable');
     return mainWindow.getMediaSourceId();
+  });
+
+  ipcMain.handle('gcode:save', async (event, text, suggestedName) => {
+    const senderUrl = event.senderFrame?.url || event.sender.getURL();
+    if (!isTrustedAppUrl(senderUrl)) {
+      throw new Error('Untrusted G-code save request');
+    }
+    if (typeof text !== 'string' || text.length === 0) {
+      throw new TypeError('G-code must be a non-empty string');
+    }
+    if (text.length > 200 * 1024 * 1024) {
+      throw new RangeError('G-code exceeds the 200 MB limit');
+    }
+
+    const outputDirectory = path.join(app.getPath('documents'), 'Byeza Studio', 'gcode');
+    await fs.mkdir(outputDirectory, { recursive: true });
+    // Keep only the basename and strip anything a filesystem would object to.
+    const safeName = path.basename(String(suggestedName ?? 'model.gcode'))
+      .replace(/[<>:"/\|?*\u0000-\u001f]/g, '-')
+      .slice(0, 120) || 'model.gcode';
+    const finalName = safeName.toLowerCase().endsWith('.gcode') ? safeName : `${safeName}.gcode`;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const outputPath = path.join(outputDirectory, `${timestamp}-${finalName}`);
+    await fs.writeFile(outputPath, text, { encoding: 'utf8', flag: 'wx' });
+    return Object.freeze({ path: outputPath, bytes: Buffer.byteLength(text, 'utf8') });
   });
 
   ipcMain.handle('recording:save', async (event, arrayBuffer) => {
